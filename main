@@ -1,0 +1,3535 @@
+/*
+ * - Final iteration of program
+ * - Pin assignments adjusted to actual connections of Proto-board
+ */
+
+#include <EEPROM.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <avr/wdt.h>
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+// ATMega328P Pin Associations
+#define expRunningLED 0
+#define expPausedLED 1
+#define buttonInt 2 // Hardware interrupt to handle button presses and rotary encoder ticks
+#define sensorInt 3 // Hardware interrupt to handle IR Beam pulses
+#define expArmedLED 4
+#define REData 5  // Quadrature signal from rotary encoder
+#define feedOne 6 // Activate feeder one
+#define feedTwo 7 // Activate feeder two
+#define tinyInt 8 // Alert pin to ATTiny
+#define pageBack 9  // Change page back one
+#define armSystem 10  // Readies system to start experiment
+#define resetExp 11 // Reset experiment
+#define REButton 12 // Rotary encoder button
+#define manualFeedFeederOne 13  // Manually dispense one pellet from feeder one AND count pellets from feeder one
+#define feederTwo 14  //  Count pellets from feeder one
+#define lapTimerSignal 15 //  Receives start IR pulse
+#define timerStartSignal 16  //  Receives lap IR pulse
+#define REClk 17  // Clock signal from rotary encoder
+
+// Page Numbers
+const uint8_t mainPage = 0;
+const uint8_t chooseExpPage = 1;
+const uint8_t createExpPage = 2;
+const uint8_t settingsPage = 3;
+const uint8_t expDisplayPage = 4;
+const uint8_t numPelletsPage = 6;
+const uint8_t pelletChoicePage = 7;
+const uint8_t lapsForRewardPage = 8;
+const uint8_t lapChoicePage = 9;
+const uint8_t intervalScheduleOnOffPage = 10;
+const uint8_t intervalSchedulePage = 11;
+const uint8_t feederSetupPage = 12;
+const uint8_t bothFeedersPage = 13;
+const uint8_t mainMenuOrRenamePage = 14;
+const uint8_t expNamePage = 15;
+const uint8_t resetDevicePage = 16;
+const uint8_t expDetailsPage = 17;
+const uint8_t areYouSureResetPage = 18;
+
+// Navigation Variables and Booleans
+volatile uint8_t prevPage = 0;
+volatile uint8_t nextPage = 0;
+volatile uint8_t screenNum = 0;
+uint8_t arrayLength = 0;
+uint8_t cursorLocation = 0;
+uint8_t chooseExpCalledFrom = 0;
+uint8_t feederSetupCalledFrom = 0;
+uint8_t resetCalledFrom = 0;
+const bool pageClick = false;
+const bool itemClick = true;
+bool clickType = false;
+bool alreadyClicked = false;
+bool cursorMoved = false;
+bool chooseRange = false;
+bool stayOnPage = false;
+bool blinkOn = false;
+bool moveChar = false;
+
+// System Operation Variables
+uint8_t navNumber = 0; 
+uint8_t whatToReset = 0;
+bool bounds = false;
+
+// System Booleans
+bool beenPressed = false;
+bool timerOn = false;
+bool systemArmed = false;
+bool onExpDisplayPage = false;
+bool lightOn = false;
+bool oldLightOn = false; 
+bool itemSelected = false;
+bool done = false;
+bool eraseCursor = true;
+bool somethingMoved = false;
+bool switchBeam = false;
+bool experimentStarted = false;
+bool experimentRunning = false;
+bool experimentPaused = false;
+bool manualFeeding = false;
+
+// Counter Variables
+const uint8_t numbers = 0;
+const uint8_t characters = 1;
+const uint8_t pellet = 2;
+const uint8_t lap = 3;
+const uint8_t interval = 4;
+uint8_t counterType = 0;
+
+volatile int cursorIndex = 0;
+volatile int oldCursorIndex = 0;
+volatile int line = 0;
+volatile int oldLine = 0;
+volatile int lineIndex = 0;
+volatile int charCount = 0;
+volatile uint8_t lapCount = 0; 
+volatile int intervalSecondsCount = 0;
+volatile int intervalTenSecondsCount = 0;
+volatile int intervalMinutesCount = 0;
+const char characterArray[90] = {'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l','m',
+                                 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+                                 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+                                 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+                                 '!', '@', '#', '$', '%', '^', '&', '|', '(', ')', '{', '}', '[',
+                                 ']', '+', '-', '*', '/', ':', ';', '\"', '\'', '<', '>', '?', ',', 
+                                 '.', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ' '};
+
+// Update Variables
+uint8_t updateType = 0;
+const uint8_t refreshLcd = 0;
+const uint8_t updateLcd = 1;
+volatile bool changePage = false;
+volatile bool setPage = false;
+volatile bool updatePage = false;
+
+// Experiment names
+char expOne[10];
+char expTwo[10];
+char expThree[10];
+char expFour[10];
+char expFive[10];
+char expSix[10];
+char newName[10];
+uint8_t expChoice = 0;
+bool leavePage = false;
+
+// Feeder Variables
+uint8_t feederOneDispensedPellets = 0;
+uint8_t feederTwoDispensedPellets = 0;
+uint8_t pelletCount = 0;
+uint8_t feederNumber = 1;
+
+// Data Collection Variables
+volatile uint8_t tenMinuteCounter = 0;
+volatile uint8_t minutesCounter = 0;
+volatile uint8_t tenSecondCounter = 0;
+volatile uint8_t secondsCounter = 0;
+uint8_t lapsCompletedTens = 0;
+uint8_t lapsCompletedOnes = 0;
+uint8_t lapsCompletedHalfs = 0;
+uint8_t halfLapArrayLength = 0;
+uint16_t halfLapArray[78];
+
+uint8_t feederOneDispensedPelletsArray[78];
+uint8_t feederOneLapsForRewardArray[78];
+uint16_t feederOneIntervalTimeArray[78];
+uint8_t feederOneOutputCodeArray[78];
+uint8_t feederOneNumberOfPelletsToDispense = 0;
+uint8_t feederOnePelletBuffer = 0;
+uint8_t feederOneLapsToGetReward = 0;
+uint16_t feederOneIntervalTimeForReward = 0;
+uint8_t feederOneOutputCode = 0;
+uint8_t feederOneLapCounter = 0;
+uint8_t feederOneIntervalCounter = 0;
+
+uint8_t feederTwoDispensedPelletsArray[78];
+uint8_t feederTwoLapsForRewardArray[78];
+uint16_t feederTwoIntervalTimeArray[78];
+uint8_t feederTwoOutputCodeArray[78];
+uint8_t feederTwoNumberOfPelletsToDispense = 0;
+uint8_t feederTwoPelletBuffer = 0;
+uint8_t feederTwoLapsToGetReward = 0;
+uint16_t feederTwoIntervalTimeForReward = 0;
+uint8_t feederTwoOutputCode = 0;
+uint8_t feederTwoLapCounter = 0;
+uint8_t feederTwoIntervalCounter = 0;
+
+// Structs
+struct Parameters
+{
+  bool useFeederOne;  // Default: true
+  bool feederOnePelletCountType;  // Discrete = false, Random = true
+  uint8_t feederOneNumberOfPellets; // If 'pelletRewardType' is discrete
+  uint8_t feederOneLowBoundPellets;  // If 'pelletRewardType' is random
+  uint8_t feederOneHighBoundPellets;
+  uint8_t feederOneLapCountType;  // Discrete = 0, Random = 1, Progressive Ratio = 2
+  uint8_t feederOneNumberOfLaps;  // If 'lapCountType' is discrete
+  uint8_t feederOneLowBoundLaps; // If 'lapCountType' is random
+  uint8_t feederOneHighBoundLaps;
+  bool feederOneIntervalSchedule;  // Default: false
+  bool feederOneIntervalScheduleType;  // Discrete = false, Random = true
+  uint16_t feederOneIntervalTime;  // If 'intervalScheduleType' is discrete
+  uint16_t feederOneLowBoundOfInterval;  // If 'intervalScheduleType' is random
+  uint16_t feederOneHighBoundOfInterval;
+
+  bool useFeederTwo;  // Default: false
+  bool feederTwoPelletCountType;
+  uint8_t feederTwoNumberOfPellets;
+  uint8_t feederTwoLowBoundPellets;  
+  uint8_t feederTwoHighBoundPellets;
+  uint8_t feederTwoLapCountType;
+  uint8_t feederTwoNumberOfLaps;
+  uint8_t feederTwoLowBoundLaps;
+  uint8_t feederTwoHighBoundLaps;
+  bool feederTwoIntervalSchedule;  // Default: false
+  bool feederTwoIntervalScheduleType;  // Discrete = false, Random = true
+  uint16_t feederTwoIntervalTime;  // If 'intervalScheduleType' is discrete
+  uint16_t feederTwoLowBoundOfInterval;  // If 'intervalScheduleType' is random
+  uint16_t feederTwoHighBoundOfInterval;
+} experiment = {
+                true, false, 1, 1, 1, 0, 1, 1, 1, false, false, 0, 0, 0,
+                false, false, 1, 1, 1, 0, 1, 1, 1, false, false, 0, 0, 0,
+                };
+
+struct Time 
+{
+  uint8_t tenMinutes;
+  uint8_t minutes;
+  uint8_t tenSeconds;
+  uint8_t seconds;
+} timeToConvert = {0, 0, 0, 0};
+
+uint8_t pressCount = 0;
+
+void setup() 
+{
+  randomSeed(analogRead(A5)); // Read pin before it assigned to drive i2c LCD
+  lcd.init();
+  lcd.backlight();
+  wdt_enable(WDTO_2S);
+  pinMode(expRunningLED, OUTPUT);
+  pinMode(expPausedLED, OUTPUT);
+  pinMode(buttonInt, INPUT);
+  pinMode(sensorInt, INPUT);
+  pinMode(expArmedLED, OUTPUT);
+  pinMode(REData, INPUT_PULLUP);
+  pinMode(feedOne, OUTPUT);
+  pinMode(feedTwo, OUTPUT);
+  pinMode(tinyInt, OUTPUT);
+  pinMode(pageBack, INPUT_PULLUP);
+  pinMode(armSystem, INPUT_PULLUP);
+  pinMode(resetExp, INPUT_PULLUP);
+  pinMode(REButton, INPUT_PULLUP); 
+  pinMode(manualFeedFeederOne, INPUT_PULLUP);
+  pinMode(feederTwo, INPUT_PULLUP); 
+  pinMode(lapTimerSignal, INPUT_PULLUP);
+  pinMode(timerStartSignal, INPUT_PULLUP);
+  pinMode(REClk, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(sensorInt), sensorRead, RISING);
+  attachInterrupt(digitalPinToInterrupt(buttonInt), buttonRead, RISING);
+  digitalWrite(expRunningLED, LOW);
+  digitalWrite(expPausedLED, LOW);
+  digitalWrite(expArmedLED, LOW);
+  digitalWrite(tinyInt, HIGH);
+  digitalWrite(feedOne, HIGH);
+  digitalWrite(feedTwo, HIGH);
+  
+  setupTimer();
+  readExpNames();
+  screenUpdate();
+}
+
+// ********** Output State Machine **********
+void loop() 
+{
+  switch (screenNum)
+  {
+    case mainPage:
+      mainMenu();
+    break;
+
+    case chooseExpPage: 
+      chooseExp();
+    break;
+
+    case expDisplayPage:
+      expDisplay();
+    break;
+
+    case expDetailsPage:
+      expDetails();
+    break;
+
+    case settingsPage:
+      settings();
+    break;
+
+    case createExpPage: 
+      createExp();      
+    break;
+
+    case numPelletsPage:
+      numPellets();
+    break;
+
+    case pelletChoicePage:
+      pelletChoice();
+    break;
+    
+    case lapsForRewardPage:
+      lapsForReward();
+    break;
+
+    case lapChoicePage:
+      lapChoice();
+    break;
+
+    case intervalScheduleOnOffPage:
+      intervalScheduleOnOff();
+    break;
+    
+    case intervalSchedulePage:
+      intervalSchedule();
+    break;
+
+    case feederSetupPage:
+      feederSetup();
+    break;
+
+    case bothFeedersPage:
+      bothFeeders();
+    break;
+
+    case mainMenuOrRenamePage:
+      mainMenuOrRename();
+    break;
+
+    case resetDevicePage:
+      resetDevice();
+    break;
+
+    case expNamePage:
+      expName();
+    break;
+
+    case areYouSureResetPage:
+      areYouSureReset();
+    break;
+
+    default:
+      mainMenu();
+    break;
+  }
+  wdt_reset();
+}
+
+// ********** Input Handlers **********
+void buttonRead(void) // Button ISR
+{
+  // DIO state booleans
+  bool armSystemButton = true;
+  bool backButton = true;
+  bool manualFeedButton = true;
+  bool resetExperiment = true;
+  bool rotaryEncoderClick = true;
+
+  armSystemButton = digitalRead(armSystem);
+  backButton = digitalRead(pageBack);
+  manualFeedButton = digitalRead(manualFeedFeederOne);
+  resetExperiment = digitalRead(resetExp);
+  rotaryEncoderClick = digitalRead(REButton);
+
+  if (!armSystemButton)  
+  {
+    if (onExpDisplayPage)  // Arm system once on "expDisplay" page
+    {
+      if (!experimentRunning)
+      {
+        if (beenPressed)  // Toggle armed state of system until experiment actually starts
+        {
+          digitalWrite(expArmedLED, LOW);
+          systemArmed = false;
+          beenPressed = false;
+        }
+        else
+        {
+          digitalWrite(expArmedLED, HIGH);
+          systemArmed = true;
+          beenPressed = true;
+        }
+      }
+      else  // If experiment is running
+      {
+        if (!experimentPaused)  // If experiment is running, pause it
+        {
+          digitalWrite(expRunningLED, LOW);
+          digitalWrite(expPausedLED, HIGH);
+          timerOn = false;
+          systemArmed = false;
+          experimentPaused = true;
+        }
+        else // If experiment is paused, unpause it
+        {
+          digitalWrite(expPausedLED, LOW);
+          timerOn = true;
+          systemArmed = true;
+          experimentPaused = false;
+        }
+      }
+    }
+  }
+  else if (!backButton) // Change screen back to previous page
+  {
+    if (!systemArmed) // Disable back button while experiment is running/about to run
+    {
+      digitalWrite(expPausedLED, LOW);
+      digitalWrite(expArmedLED, LOW);
+      changeScreenBack();
+      screenUpdate();
+    }
+  } 
+  else if (!manualFeedButton) // Dispense one pellet from feeder one
+  {
+    manualFeeding = true;
+    runFeederOne();
+  } 
+  else if (!resetExperiment)
+  {
+    if (onExpDisplayPage)
+    {
+      nextPage = areYouSureResetPage;
+      changeScreenForward();
+      pageTransition();
+    }
+  }
+  else if (!rotaryEncoderClick) // Rotary encoder button press
+  { 
+    clicked();
+    screenUpdate();
+  }
+}
+
+void sensorRead(void) // Sensor ISR
+{
+  // DIO state booleans
+  bool startTimer = true;
+  bool lapTimer = true;
+  bool feederOnePulse = true;
+  bool feederTwoPulse = true;
+  bool rotaryEncoderClk = true;
+  bool rotaryEncoderQuad = true;
+  
+  startTimer = digitalRead(timerStartSignal);
+  lapTimer = digitalRead(lapTimerSignal);
+  feederOnePulse = digitalRead(manualFeedFeederOne);
+  feederTwoPulse = digitalRead(feederTwo);
+  rotaryEncoderClk = digitalRead(REClk);
+  rotaryEncoderQuad = digitalRead(REData);
+  
+  if (!startTimer)  // Start/Lap IR beam handler
+  {
+    if (systemArmed)  // System ready to run/is running
+    {
+      if (halfLapArrayLength == 0)  // Only ran during first beam breakage
+      {
+        digitalWrite(expArmedLED, LOW);
+        experimentStarted = true;
+        experimentRunning = true;
+        timerOn = true;
+        somethingMoved = true;
+        collectHalfLaps();  // Saves '0:00' into index 0 of halfLapArray to hold spot, ie. to keep arrays aligned
+        if (experiment.useFeederOne)
+        {
+          calculateFeederOneParameters();
+          collectFeederOneData();
+        }
+        if (experiment.useFeederTwo)
+        {
+          calculateFeederTwoParameters();
+          collectFeederTwoData();
+        }
+        feederOnePelletBuffer = feederOneNumberOfPelletsToDispense; // Save calculated value 
+        feederTwoPelletBuffer = feederTwoNumberOfPelletsToDispense;
+        arrayControl();
+      }
+      if (switchBeam) // Consecutive beam break lock out
+      {
+        collectHalfLaps();
+        calculateTotalLaps();
+        if (experiment.useFeederOne)
+        {
+          if (halfLapArrayLength > 1)
+            feederOneLapCounter++;
+          collectFeederOneData();
+          calculateFeederOneOutputCode();
+        }
+        if (experiment.useFeederTwo)
+        {
+          if (halfLapArrayLength > 1)
+            feederTwoLapCounter++;
+          collectFeederTwoData();
+          calculateFeederTwoOutputCode();
+        }
+        arrayControl();
+        switchBeam = false;
+      }
+    }
+  } 
+  else if (!lapTimer)  // Lap IR beam handler
+  {
+    if (systemArmed)
+    {
+      if (!switchBeam && timerOn)  // Consecutive beam break lock out
+      {
+        collectHalfLaps();
+        calculateTotalLaps();
+        if (experiment.useFeederOne)
+          collectFeederOneData();
+        if (experiment.useFeederTwo)
+          collectFeederTwoData();
+        switchBeam = true;
+        arrayControl();
+      }
+    }
+  } 
+  else if (!feederOnePulse)
+  {
+    if (!manualFeeding)
+    {
+      feederOneDispensedPellets++;  // Count the number of pellets dispensed by feeder one
+      if (feederOneDispensedPellets >= feederOnePelletBuffer)
+      {
+        stopFeederOne();
+        feederOneDispensedPellets = 0;
+      }
+    }
+    else
+    {
+      stopFeederOne();
+      manualFeeding = false;
+    }
+  } 
+  else if (!feederTwoPulse)
+  {
+    feederTwoDispensedPellets++;  // Count the number of pellets dispensed by feeder two
+    if (feederTwoDispensedPellets >= feederTwoPelletBuffer)
+    {
+      stopFeederTwo();
+      feederTwoDispensedPellets = 0;
+    }
+  }
+  else if (!rotaryEncoderClk)  // Handle rotary encoder rotations
+  {
+    if (rotaryEncoderClk == rotaryEncoderQuad) // Rotation: CW
+    {
+      countUp(); // Increment general counter
+      screenUpdate();
+    } 
+    else if (rotaryEncoderClk != rotaryEncoderQuad)  // Rotation: CCW
+    {
+      countDown(); // Decrement general counter
+      screenUpdate();
+    }   
+  }
+}
+
+// ********** Screen Navigation Functions **********
+void changeScreenForward(void)
+{
+  setVariables();
+  screenNum = nextPage;
+  clickType = pageClick;
+  counterType = numbers;
+  updateType = refreshLcd;
+  somethingMoved = true;
+  changePage = true;
+}
+
+void changeScreenBack(void)
+{
+  setVariables();
+  screenNum = prevPage;
+  clickType = pageClick;
+  counterType = numbers;
+  updateType = refreshLcd;
+  changePage = true;
+  stayOnPage = false;
+  somethingMoved = true;
+  itemSelected = false;
+}
+
+void screenUpdate(void)
+{
+  switch (updateType)
+  {
+    case refreshLcd:
+      setPage = true;
+      updatePage = false;
+    break;
+    case updateLcd:
+      setPage = false;
+      updatePage = true;
+    break;
+  }
+  somethingMoved = true;
+}
+
+void clicked(void)
+{
+  switch (clickType)
+  {
+    case pageClick:
+      changeScreenForward();
+    break;
+    case itemClick:
+      chooseSelectedItem();
+    break;
+  }
+}
+
+void setVariables(void)
+{
+  charCount = 0;
+  cursorIndex = 0;
+  oldCursorIndex = 0;
+  line = 1;
+  oldLine = 1;
+  lineIndex = 0;
+}
+
+void pageTransition(void)
+{
+  if (changePage)
+  {
+    setPage = true;
+    changePage = false;
+  }
+  else 
+    setPage = false;
+}
+
+void chooseSelectedItem(void)
+{
+  itemSelected ? itemSelected = false : itemSelected = true;
+  somethingMoved = true;
+}
+
+// ********** LCD Pages **********
+void mainMenu(void) // Complete
+{
+  String lineItemArray[3] = {F("Start Experiment"), F("Create Experiment"), F("Settings")};
+  arrayLength = 3;
+  switch (!setPage)
+  {
+    case 0:
+      updateType = refreshLcd;
+      clickType = itemClick;
+      chooseExpCalledFrom = mainPage;
+
+      if (somethingMoved)
+      {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print(F("MAIN MENU"));
+        lcd.setCursor(1, 1);
+        lcd.print(lineItemArray[lineIndex]);
+        lcd.setCursor(1, 2);
+        lcd.print(lineItemArray[lineIndex + 1]);
+        lcd.setCursor(1, 3);
+        lcd.print(lineItemArray[lineIndex + 2]);
+        lcd.setCursor(0, (cursorIndex + 1));
+        lcd.print(F("*"));
+        somethingMoved = false;
+      }
+
+      pageTransition();
+    break;
+    case 1:
+      if (itemSelected)
+      {
+        switch (cursorIndex)
+        {
+          case 0:
+            nextPage = chooseExpPage;
+          break;
+          case 1:
+            nextPage = createExpPage;
+            resetStruct();
+          break;
+          case 2:
+            nextPage = settingsPage;
+          break;
+        }
+        changeScreenForward();
+        pageTransition();
+        itemSelected = false;
+      }
+    break;
+  } 
+}
+
+// ***** Start Experiment and Branches *****
+void chooseExp(void)  // Complete
+{
+  uint8_t cursorArray[6][2] = {{0, 1}, {0, 2}, {0, 3}, {10, 1}, {10, 2}, {10, 3}};
+  arrayLength = 6;
+  switch(!setPage)
+  {
+    case 0:
+      // Experiment control variables
+      onExpDisplayPage = false;
+      systemArmed = false;
+      experimentRunning = false;
+
+      chooseExpPathMemory(); // Supplements case statement for navigation since multiple pages point to 'chooseExp'
+      clickType = itemClick;
+      updateType = refreshLcd;
+
+      if (somethingMoved)
+      {
+        lcd.clear();
+        lcd.noCursor();
+        lcd.setCursor(0, 0);
+        lcd.print(F("Choose Experiment"));
+        lcd.setCursor(1, 1);
+        lcd.print(expOne);
+        lcd.setCursor(11, 1);
+        lcd.print(expFour);
+        lcd.setCursor(1, 2);
+        lcd.print(expTwo);
+        lcd.setCursor(11, 2);
+        lcd.print(expFive);
+        lcd.setCursor(1, 3);
+        lcd.print(expThree);
+        lcd.setCursor(11, 3);
+        lcd.print(expSix);
+        lcd.setCursor(cursorArray[cursorIndex][0],cursorArray[cursorIndex][1]);
+        lcd.print(F("*"));
+        somethingMoved = false;
+      }
+
+      pageTransition();
+    break;
+    case 1:
+      if (itemSelected)
+      {
+        expChoice = uint8_t(cursorIndex + 1); // HAS to be placed before 'if (prevPage != createExpPage)'
+        if (prevPage != createExpPage)
+          readExperimentFromEEPROM();
+        if (prevPage == mainPage)
+          resetExperiment();
+        changeScreenForward();
+        pageTransition();
+        itemSelected = false;
+      }
+    break;
+  }
+  delay(5); // Needed for stability
+}
+
+void expDisplay(void)
+{
+  arrayLength = halfLapArrayLength;
+  switch (!setPage)
+  {
+    case 0:
+      onExpDisplayPage = true;
+      updateType = updateLcd;
+      clickType = itemClick;
+      resetCalledFrom = expDisplayPage;
+      prevPage = chooseExpPage;
+
+      if (somethingMoved)
+      {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print(F("TIME:"));
+        lcd.print(tenMinuteCounter);
+        lcd.print(minutesCounter);
+        lcd.print(":");
+        lcd.print(tenSecondCounter);
+        lcd.print(secondsCounter);
+        lcd.print(F(" Laps:"));
+        lcd.print(lapsCompletedTens);
+        lcd.print(lapsCompletedOnes);
+        lcd.print(F("."));
+        lcd.print(lapsCompletedHalfs);
+        // Negation purposely not placed
+      }
+
+      pageTransition();
+    break;
+    case 1:
+      if (somethingMoved)
+      {
+        // First line of data readout
+        if (halfLapArrayLength >= 1 || experimentStarted)
+        {
+          if (lineIndex != 0) // 'halfLapArray[0]' = 00:00 so don't print it 
+          {
+            timeToConvert = {0, 0, 0, 0};
+            timeToConvert = convertIntToTime(halfLapArray[lineIndex]);
+            lcd.setCursor(1, 1);
+            lcd.print(timeToConvert.tenMinutes);
+            lcd.print(timeToConvert.minutes);
+            lcd.print(":");
+            lcd.print(timeToConvert.tenSeconds);
+            lcd.print(timeToConvert.seconds);
+          }
+          else  // Clear first line when 'halfLapArray[0]' should be printed
+          {
+            lcd.setCursor(1, 1);
+            lcd.print(F("     "));
+          }
+        
+          if (experiment.useFeederOne)
+          {
+            // If count type is random, print everything. OR if count type is discrete, only print first item in array
+            lcd.setCursor(6, 1);
+            experiment.feederOnePelletCountType || lineIndex == 0 ? lcd.print(feederOneDispensedPelletsArray[lineIndex]) : lcd.print(F(" "));
+            
+            // If count type is not discrete, print everything
+            lcd.setCursor(7, 1);
+            experiment.feederOneLapCountType != 0 || lineIndex == 0 ? lcd.print(feederOneLapsForRewardArray[lineIndex]) : lcd.print(F(" "));
+
+            if (experiment.feederOneIntervalSchedule)
+            {
+              lcd.setCursor(8, 1);
+              if (experiment.feederOneIntervalScheduleType || lineIndex == 0)
+              {
+                timeToConvert = {0, 0, 0, 0};
+                timeToConvert = convertIntToTime(feederOneIntervalTimeArray[lineIndex]);
+                lcd.print(timeToConvert.minutes);
+                lcd.print(F(":"));
+                lcd.print(timeToConvert.tenSeconds);
+                lcd.print(timeToConvert.seconds);
+              }
+              else
+              {
+                lcd.print(F("    "));
+              }
+            }
+              lcd.setCursor(12, 1);
+              if (lineIndex % 2 == 0)
+              {
+                if (feederOneOutputCodeArray[lineIndex] != 0)
+                  lcd.print(feederOneOutputCodeArray[lineIndex]);
+              }
+              else
+                lcd.print(F(" "));
+          }
+          if (experiment.useFeederTwo)
+          {
+            // If count type is random, print everything. OR if count type is discrete, only print first item in array
+            lcd.setCursor(13, 1);
+            experiment.feederTwoPelletCountType || lineIndex == 0 ? lcd.print(feederTwoDispensedPelletsArray[lineIndex]) : lcd.print(F(" "));
+            
+            // If count type is not discrete, print everything
+            lcd.setCursor(14, 1);
+            experiment.feederTwoLapCountType != 0 || lineIndex == 0 ? lcd.print(feederTwoLapsForRewardArray[lineIndex]) : lcd.print(F(" "));
+            
+            if (experiment.feederTwoIntervalSchedule)
+            {
+              lcd.setCursor(15, 1);
+              if (experiment.feederTwoIntervalScheduleType || lineIndex == 0) // If interval type is random
+              {
+                timeToConvert = {0, 0, 0, 0};
+                timeToConvert = convertIntToTime(feederTwoIntervalTimeArray[lineIndex]);
+                lcd.print(timeToConvert.minutes);
+                lcd.print(F(":"));
+                lcd.print(timeToConvert.tenSeconds);
+                lcd.print(timeToConvert.seconds);
+              }
+              else
+              {
+                lcd.print(F("    "));
+              }
+            }
+            lcd.setCursor(19, 1);
+            if (lineIndex % 2 == 0)
+            {
+              if(feederTwoOutputCodeArray[lineIndex] != 0)
+                lcd.print(feederTwoOutputCodeArray[lineIndex]);
+            }
+            else
+              lcd.print(F(" "));
+          }
+        }
+
+        // Second line of data readout
+        if (halfLapArrayLength >= 2)
+        {
+          timeToConvert = {0, 0, 0, 0};
+          timeToConvert = convertIntToTime(halfLapArray[lineIndex + 1]);
+          lcd.setCursor(1, 2);
+          lcd.print(timeToConvert.tenMinutes);
+          lcd.print(timeToConvert.minutes);
+          lcd.print(":");
+          lcd.print(timeToConvert.tenSeconds);
+          lcd.print(timeToConvert.seconds);
+
+          if (experiment.useFeederOne)
+          {
+            if (experiment.feederOnePelletCountType)  // If count type is random, print everything
+            {
+              lcd.setCursor(6, 2);
+              lcd.print(feederOneDispensedPelletsArray[lineIndex + 1]);
+            }
+            
+            if (experiment.feederOneLapCountType != 0)  // If count type is not discrete, print everything
+            {
+              lcd.setCursor(7, 2);
+              lcd.print(feederOneLapsForRewardArray[lineIndex + 1]);
+            }
+            
+            if (experiment.feederOneIntervalSchedule)
+            {
+              if (experiment.feederOneIntervalScheduleType) // If interval type is random
+              {
+                timeToConvert = {0, 0, 0, 0};
+                timeToConvert = convertIntToTime(feederOneIntervalTimeArray[lineIndex + 1]);
+                lcd.setCursor(8, 2);
+                lcd.print(timeToConvert.minutes);
+                lcd.print(F(":"));
+                lcd.print(timeToConvert.tenSeconds);
+                lcd.print(timeToConvert.seconds);
+              }
+            }
+              lcd.setCursor(12, 2);
+              if ((lineIndex + 1) % 2 == 0)
+              {
+                if (feederOneOutputCodeArray[lineIndex + 1] != 0)
+                  lcd.print(feederOneOutputCodeArray[lineIndex + 1]);
+              }
+              else
+                lcd.print(F(" "));
+          }
+          if (experiment.useFeederTwo)
+          {
+            if (experiment.feederTwoPelletCountType)  // If count type is random, print everything
+            {
+              lcd.setCursor(13, 2);
+              lcd.print(feederTwoDispensedPelletsArray[lineIndex + 1]);
+            }
+            if (experiment.feederTwoLapCountType != 0)  // If count type is not discrete, print everything
+            {
+              lcd.setCursor(14, 2);
+              lcd.print(feederTwoLapsForRewardArray[lineIndex + 1]);
+            }
+            if (experiment.feederTwoIntervalSchedule)
+            {
+              if (experiment.feederTwoIntervalScheduleType) // If interval type is random
+              {
+                timeToConvert = {0, 0, 0, 0};
+                timeToConvert = convertIntToTime(feederTwoIntervalTimeArray[lineIndex + 1]);
+                lcd.setCursor(15, 2);
+                lcd.print(timeToConvert.minutes);
+                lcd.print(F(":"));
+                lcd.print(timeToConvert.tenSeconds);
+                lcd.print(timeToConvert.seconds);
+              }
+            }
+              lcd.setCursor(19, 2);
+              if ((lineIndex + 1) % 2 == 0)
+              {
+                if (feederTwoOutputCodeArray[lineIndex + 1] != 0)
+                  lcd.print(feederTwoOutputCodeArray[lineIndex + 1]);
+              }
+              else
+                lcd.print(F(" "));
+          }
+        }
+
+        // Third line of data readout
+        if (halfLapArrayLength >= 3)
+        {
+          timeToConvert = {0, 0, 0, 0};
+          timeToConvert = convertIntToTime(halfLapArray[lineIndex + 2]);
+          lcd.setCursor(1, 3);
+          lcd.print(timeToConvert.tenMinutes);
+          lcd.print(timeToConvert.minutes);
+          lcd.print(":");
+          lcd.print(timeToConvert.tenSeconds);
+          lcd.print(timeToConvert.seconds);
+
+          if (experiment.useFeederOne)
+          {
+            if (experiment.feederOnePelletCountType)  // If count type is random, print everything
+            {
+              lcd.setCursor(6, 3);
+              lcd.print(feederOneDispensedPelletsArray[lineIndex + 2]);
+            }
+            if (experiment.feederOneLapCountType != 0)  // If count type is not discrete, print everything
+            {
+              lcd.setCursor(7, 3);
+              lcd.print(feederOneLapsForRewardArray[lineIndex + 2]);
+            }
+            if (experiment.feederOneIntervalSchedule)
+            {
+              if (experiment.feederOneIntervalScheduleType) // If interval type is random
+              {
+                timeToConvert = {0, 0, 0, 0};
+                timeToConvert = convertIntToTime(feederOneIntervalTimeArray[lineIndex + 2]);
+                lcd.setCursor(8, 3);
+                lcd.print(timeToConvert.minutes);
+                lcd.print(F(":"));
+                lcd.print(timeToConvert.tenSeconds);
+                lcd.print(timeToConvert.seconds);
+              }
+            }
+              lcd.setCursor(12, 3);
+              if ((lineIndex + 2) % 2 == 0)
+              {
+                if(feederOneOutputCodeArray[lineIndex + 2] != 0)
+                  lcd.print(feederOneOutputCodeArray[lineIndex + 2]);
+              }
+              else
+                lcd.print(F(" "));
+          }
+          if (experiment.useFeederTwo)
+          {
+            if (experiment.feederTwoPelletCountType)  // If count type is random, print everything
+            {
+              lcd.setCursor(13, 3);
+              lcd.print(feederTwoDispensedPelletsArray[lineIndex + 2]);
+            }
+            if (experiment.feederTwoLapCountType != 0)  // If count type is not discrete, print everything
+            {
+              lcd.setCursor(14, 3);
+              lcd.print(feederTwoLapsForRewardArray[lineIndex + 2]);
+            }
+            if (experiment.feederTwoIntervalSchedule)
+            {
+              if (experiment.feederTwoIntervalScheduleType) // If interval type is random
+              {
+                timeToConvert = {0, 0, 0, 0};
+                timeToConvert = convertIntToTime(feederTwoIntervalTimeArray[lineIndex + 2]);
+                lcd.setCursor(15, 3);
+                lcd.print(timeToConvert.minutes);
+                lcd.print(F(":"));
+                lcd.print(timeToConvert.tenSeconds);
+                lcd.print(timeToConvert.seconds);
+              }
+            }
+              lcd.setCursor(19, 3);
+              if ((lineIndex + 2) % 2 == 0)
+              {
+                if (feederTwoOutputCodeArray[lineIndex + 2] != 0)
+                  lcd.print(feederTwoOutputCodeArray[lineIndex + 2]);
+              }
+              else
+                lcd.print(F(" "));
+          }
+        }
+
+        pointerControl();
+        somethingMoved = false;
+      }
+    break;
+  }
+  
+  if (updatePage)
+  {
+    lcd.setCursor(5, 0);
+    lcd.print(tenMinuteCounter);
+    lcd.print(minutesCounter);
+    lcd.print(":");
+    lcd.print(tenSecondCounter);
+    lcd.print(secondsCounter);
+    lcd.setCursor(16, 0);
+    lcd.print(lapsCompletedTens);
+    lcd.print(lapsCompletedOnes);
+    lcd.print(F("."));
+    lcd.print(lapsCompletedHalfs);
+    updatePage = false;
+  }
+  delay(5);
+}
+
+// ***** Create Experiment and Branches *****
+void createExp(void) // Complete
+{
+  String lineItemArray[4] = {F("Feeder 1"), F("Feeder 2"), F("Both Feeders"), F("Save Experiment")};
+  arrayLength = 4;
+  switch (!setPage)
+  {
+    case 0:
+      updateType = refreshLcd;
+      clickType = itemClick;
+      prevPage = mainPage;
+      chooseExpCalledFrom = createExpPage;
+      feederSetupCalledFrom = createExpPage;
+
+      if (somethingMoved)
+      {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print(F("CREATE EXPERIMENT"));
+        lcd.setCursor(1, 1);
+        lcd.print(lineItemArray[lineIndex]);
+        lcd.setCursor(1, 2);
+        lcd.print(lineItemArray[lineIndex + 1]);
+        lcd.setCursor(1, 3); 
+        lcd.print(lineItemArray[lineIndex + 2]);
+        lcd.setCursor(0, line);
+        lcd.print(F("*"));
+        somethingMoved = false;
+      }
+
+      pageTransition();
+    break;
+    case 1:
+      if (itemSelected)
+      {
+        switch (cursorIndex)
+        {
+          case 0:
+            feederNumber = 1;
+            experiment.useFeederOne = true;
+            experiment.useFeederTwo = false;
+            nextPage = feederSetupPage;
+          break;
+          case 1:
+            feederNumber = 2;
+            experiment.useFeederOne = false;
+            experiment.useFeederTwo = true;
+            nextPage = feederSetupPage;
+          break;
+          case 2:
+            feederNumber = 3;
+            experiment.useFeederOne = true;
+            experiment.useFeederTwo = true;
+            nextPage = bothFeedersPage;
+          break;
+          case 3:
+            nextPage = chooseExpPage;
+          break;
+        }
+        changeScreenForward();
+        pageTransition();
+        itemSelected = false;
+      }
+    break;
+  }
+  delay(5);
+}
+
+void mainMenuOrRename(void) // Complete
+{
+  uint8_t cursorArray[2][2] = {{1, 2}, {14, 2}};
+  arrayLength = 2;
+  switch (!setPage)
+  {
+    case 0:
+      clickType = itemClick;
+    
+      if (somethingMoved)
+      {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print(F("Rename Experiment?"));
+        lcd.setCursor(2, 2);
+        lcd.print(F("No"));
+        lcd.setCursor(15, 2);
+        lcd.print(F("Yes"));
+        lcd.setCursor(cursorArray[cursorIndex][0],cursorArray[cursorIndex][1]);
+        lcd.print(F("*"));
+        somethingMoved = false;
+      }
+
+      pageTransition();
+    break;
+    case 1:
+      if (itemSelected)
+      {
+        switch (cursorIndex)
+        {
+          case 0:
+            nextPage = mainPage;
+          break;
+          case 1:
+            nextPage = expNamePage;
+          break;
+        }
+        saveExperimentToEEPROM();
+        changeScreenForward();
+        pageTransition();
+        itemSelected = false;
+      }
+    break;
+  }
+  delay(5);
+}
+
+void bothFeeders(void)  // Complete
+{
+  String lineItemArray[3] = {F("Setup Feeder 1"), F("Setup Feeder 2"), F("Done")};
+  arrayLength = 3;
+  switch (!setPage)
+  {
+    case 0:
+      clickType = itemClick;
+      updateType = updateLcd;
+      feederSetupCalledFrom = bothFeedersPage;
+      nextPage = feederSetupPage;
+      prevPage = createExpPage;
+      
+      if (somethingMoved)
+      {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print(F("SETUP BOTH FEEDERS"));
+        lcd.setCursor(1, 1);
+        lcd.print(lineItemArray[lineIndex]);
+        lcd.setCursor(1, 2);
+        lcd.print(lineItemArray[lineIndex + 1]);
+        lcd.setCursor(1, 3);
+        lcd.print(lineItemArray[lineIndex + 2]);
+        lcd.setCursor(0, line);
+        lcd.print(F("*"));
+        
+        somethingMoved = false;
+      }
+
+      pageTransition();
+    break;
+    case 1:
+      switch (cursorIndex)
+      {
+        case 0:
+          if (somethingMoved)
+          {
+            lcd.setCursor(0, (line + 1));
+            lcd.print(F(" "));
+            lcd.setCursor(0, line);
+            lcd.print(F("*"));
+            somethingMoved = false;
+          }
+          
+          if (itemSelected) 
+          {
+            feederNumber = 1;
+            changeScreenForward();
+            pageTransition();
+            itemSelected = false;
+          }
+        break;
+        case 1:
+          if (somethingMoved)
+          {
+            lcd.setCursor(0, (line - 1));
+            lcd.print(F(" "));
+            lcd.setCursor(0, (line + 1));
+            lcd.print(F(" "));
+            lcd.setCursor(0, line);
+            lcd.print(F("*"));
+            somethingMoved = false;
+          }
+          
+          if (itemSelected) 
+          {
+            feederNumber = 2;
+            changeScreenForward();
+            pageTransition();
+            itemSelected = false;
+          }
+        break;
+        case 2:
+          if (somethingMoved)
+          {
+            lcd.setCursor(0, (line - 1));
+            lcd.print(F(" "));
+            lcd.setCursor(0, line);
+            lcd.print(F("*"));
+            somethingMoved = false;
+          }
+          
+          if (itemSelected) 
+          {
+            nextPage = createExpPage;
+            changeScreenForward();
+            pageTransition();
+            itemSelected = false;
+          }
+        break;
+      }
+    break;
+  }
+  delay(5);
+}
+
+void feederSetup(void)  // Complete
+{
+  String lineItemArray[3] = {F("#of Reward Pellets"), F("#of Laps for Reward"), F("Interval Schedule")};
+  arrayLength = 3;
+  switch (!setPage)
+  {
+    case 0:
+      clickType = itemClick;
+      feederSetupPathMemory();
+
+      if (somethingMoved)
+      {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print(F("FEEDER "));
+        feederNumber == 1? lcd.print(F("1")): lcd.print(F("2"));
+        lcd.setCursor(1, 1);
+        lcd.print(lineItemArray[lineIndex]);
+        lcd.setCursor(1, 2);
+        lcd.print(lineItemArray[lineIndex + 1]);
+        lcd.setCursor(1, 3);
+        lcd.print(lineItemArray[lineIndex + 2]);
+        lcd.setCursor(0, line);
+        lcd.print(F("*"));
+        somethingMoved = false;
+      }
+
+      pageTransition();
+    break;
+    case 1:
+      if (itemSelected)
+      {
+        switch (cursorIndex)
+        {
+          case 0:
+            nextPage = numPelletsPage;
+          break;
+          case 1:
+            nextPage = lapsForRewardPage;
+          break;
+          case 2:
+            nextPage = intervalScheduleOnOffPage;
+          break;
+        }
+        changeScreenForward();
+        pageTransition();
+        itemSelected = false;
+      }
+    break;
+  }
+  delay(5);
+}
+
+void numPellets(void) // Complete  
+{
+  String lineItemArray[2] = {F("Discrete Value"), F("Random Value")};
+  arrayLength = 2;
+  switch (!setPage)
+  {
+    case 0:
+      clickType = itemClick;
+      counterType = numbers;
+      nextPage = pelletChoicePage;
+      prevPage = feederSetupPage;
+      
+      if (somethingMoved)
+      {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print(F("# of Reward Pellets"));
+        lcd.setCursor(1, 1);
+        lcd.print(lineItemArray[lineIndex]);
+        lcd.setCursor(1, 2);
+        lcd.print(lineItemArray[lineIndex + 1]);
+        lcd.setCursor(0, line);
+        lcd.print(F("*"));
+        somethingMoved = false;
+      }
+      
+      pageTransition();
+    break;
+    case 1:
+      switch (cursorIndex)
+      {
+        case 0:
+          if (somethingMoved)
+          {
+            lcd.setCursor(0, (line + 1));
+            lcd.print(F(" "));
+            lcd.setCursor(0, line);
+            lcd.print(F("*"));
+            somethingMoved = false;
+          }
+
+          if (itemSelected)
+          {
+            if (feederNumber == 1 && experiment.useFeederOne)
+              experiment.feederOnePelletCountType = false;
+            if (feederNumber == 2 && experiment.useFeederTwo)
+              experiment.feederTwoPelletCountType = false;
+            changeScreenForward();
+            pageTransition();
+            itemSelected = false;
+          }
+        break;
+        case 1:
+          if (somethingMoved)
+          {
+            lcd.setCursor(0, (line - 1));
+            lcd.print(F(" "));
+            lcd.setCursor(0, line);
+            lcd.print(F("*"));
+            somethingMoved = false;
+          }
+
+          if (itemSelected)
+          {
+            if (feederNumber == 1 && experiment.useFeederOne)
+              experiment.feederOnePelletCountType = true;
+            if (feederNumber == 2 && experiment.useFeederTwo)
+              experiment.feederTwoPelletCountType = true;
+            changeScreenForward();
+            pageTransition();
+            itemSelected = false;
+          }
+        break;
+      }
+    break;
+  }
+}
+
+void pelletChoice(void) // Complete
+{
+  uint8_t cursorArray[2][2] = {{0, 2}, {15, 3}};
+  arrayLength = 2;
+  bool pelCountType = false;
+  if (feederNumber == 1 && experiment.useFeederOne)
+    pelCountType = experiment.feederOnePelletCountType;
+  if (feederNumber == 2 && experiment.useFeederTwo)
+    pelCountType = experiment.feederTwoPelletCountType;
+
+  switch (!setPage)
+  {
+    case 0:
+      // Cursor and Page Navigation
+      counterType = pellet;
+      clickType = itemClick;
+      updateType = updateLcd;
+      bounds = false;
+      pelletCount = 1;  // Working variable for 'experiment.feederOne/TwoNumberOfPellets'
+      nextPage = feederSetupPage;
+      prevPage = numPelletsPage;
+
+      lcd.clear();
+      pageTransition();
+    break;
+    case 1:
+      switch (pelCountType)  // Discrete Value
+      {
+        case 0:
+          switch (!leavePage)
+          {
+            case 0:
+              lcd.setCursor(cursorArray[1][0], cursorArray[1][1]);
+              lcd.print(F("*"));
+              
+              if (itemSelected)
+              {
+                if (feederNumber == 1 && experiment.useFeederOne)
+                  experiment.feederOneNumberOfPellets = pelletCount;
+                if (feederNumber == 2 && experiment.useFeederTwo)
+                  experiment.feederTwoNumberOfPellets = pelletCount;
+                changeScreenForward();
+                pageTransition();
+                leavePage = false;
+                itemSelected = false;
+              }
+            break;
+            case 1:
+              if (somethingMoved)
+              {
+                lcd.setCursor(0, 0);
+                lcd.print(F("Set Number of Reward"));
+                lcd.setCursor(0, 1);
+                lcd.print(F("Pellets:"));
+                lcd.setCursor(9, 1);
+                lcd.print(pelletCount);
+                lcd.setCursor(16, 3);
+                lcd.print(F("Done"));
+                somethingMoved = false;
+              }
+              
+              if (itemSelected)
+              {
+                leavePage = true;
+                itemSelected = false;
+              }
+            break;
+          }
+        break;
+        case 1: // Random Value
+          switch (!leavePage)
+          {
+            case 0:
+              lcd.setCursor(cursorArray[1][0], cursorArray[1][1]);
+              lcd.print(F("*"));
+              
+              if (itemSelected)
+              {
+                changeScreenForward();
+                pageTransition();
+                leavePage = false;
+                itemSelected = false;
+              }
+            break;
+            case 1:
+              if (somethingMoved)
+              {
+                lcd.setCursor(0, 0);
+                lcd.print(F("Set Range for Random"));
+                lcd.setCursor(0, 1);
+                lcd.print(F("Number of Pellets."));
+                lcd.setCursor(8, 2);
+                lcd.print(F("<->"));;
+                lcd.setCursor(16, 3);
+                lcd.print(F("Done"));
+                somethingMoved = false;
+              }
+              
+              switch (bounds)
+              {
+                case 0: // lower bound
+                  lcd.setCursor(7, 2);
+                  lcd.print(pelletCount);
+                  
+                  if (itemSelected)
+                  {
+                    if (feederNumber == 1 && experiment.useFeederOne)
+                      experiment.feederOneLowBoundPellets = pelletCount;
+                    if (feederNumber == 2 && experiment.useFeederTwo)
+                      experiment.feederTwoLowBoundPellets = pelletCount;
+                    pelletCount = 1;
+                    bounds = true;    
+                    itemSelected = false;
+                  }
+                break;
+                case 1:  // Upper bound
+                  lcd.setCursor(11, 2);
+                  lcd.print(pelletCount);
+
+                  if (itemSelected)
+                  {
+                    if (feederNumber == 1 && experiment.useFeederOne)
+                      experiment.feederOneHighBoundPellets = pelletCount;
+                    if (feederNumber == 2 && experiment.useFeederTwo)
+                      experiment.feederTwoHighBoundPellets = pelletCount;
+                    if (experiment.feederOneLowBoundPellets > experiment.feederOneHighBoundPellets)
+                    {
+                      uint8_t boundBuff = experiment.feederOneLowBoundPellets;
+                      experiment.feederOneLowBoundPellets = experiment.feederOneHighBoundPellets;
+                      experiment.feederOneHighBoundPellets = boundBuff;
+                    }
+                    if (experiment.feederTwoLowBoundPellets > experiment.feederTwoHighBoundPellets)
+                    {
+                      uint8_t boundBuff = experiment.feederTwoLowBoundPellets;
+                      experiment.feederTwoLowBoundPellets = experiment.feederTwoHighBoundPellets;
+                      experiment.feederTwoHighBoundPellets = boundBuff;
+                    }
+                    bounds = false;
+                    leavePage = true;
+                    itemSelected = false;
+                  }
+                break;
+              }
+            break;
+          }
+        break;
+      }
+    break;
+  }
+}
+
+void lapsForReward(void)  // Complete
+{
+  String lineItemArray[3] = {F("Discrete Value"), F("Random Value"), F("Prog Ratio Schedule")};
+  arrayLength = 3;
+  switch (!setPage)
+  {
+    case 0:
+      clickType = itemClick;
+      counterType = numbers;
+      nextPage = lapChoicePage;
+      prevPage = feederSetupPage;
+      
+      if (somethingMoved)
+      {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print(F("# of Laps for Reward"));
+        lcd.setCursor(1, 1);
+        lcd.print(lineItemArray[lineIndex]);
+        lcd.setCursor(1, 2);
+        lcd.print(lineItemArray[lineIndex + 1]);
+        lcd.setCursor(1, 3);
+        lcd.print(lineItemArray[lineIndex + 2]);
+        lcd.setCursor(0, line);
+        lcd.print(F("*"));
+        somethingMoved = false;
+      }
+      
+      pageTransition();
+    break;
+    case 1:
+      switch (cursorIndex)
+      {
+        case 0:
+          if (somethingMoved)
+          {
+            lcd.setCursor(0, (line + 1));
+            lcd.print(F(" "));
+            lcd.setCursor(0, line);
+            lcd.print(F("*"));
+            somethingMoved = false;
+          }
+          
+          if (itemSelected)
+          {
+            if (feederNumber == 1 && experiment.useFeederOne)
+              experiment.feederOneLapCountType = 0;
+            if (feederNumber == 2 && experiment.useFeederTwo)
+              experiment.feederTwoLapCountType = 0;
+            changeScreenForward();
+            pageTransition();
+            itemSelected = false;
+          }
+        break;
+        case 1:
+          if (somethingMoved)
+          {
+            lcd.setCursor(0, (line - 1));
+            lcd.print(F(" "));
+            lcd.setCursor(0, (line + 1));
+            lcd.print(F(" "));
+            lcd.setCursor(0, line);
+            lcd.print(F("*"));
+            somethingMoved = false;
+          }
+          
+          if (itemSelected)
+          {
+            if (feederNumber == 1 && experiment.useFeederOne)
+              experiment.feederOneLapCountType = 1;
+            if (feederNumber == 2 && experiment.useFeederTwo)
+              experiment.feederTwoLapCountType = 1;
+            changeScreenForward();
+            pageTransition();
+            itemSelected = false;
+          }
+        break;
+        case 2:
+          if (somethingMoved)
+          {
+            lcd.setCursor(0, (line - 1));
+            lcd.print(F(" "));
+            lcd.setCursor(0, line);
+            lcd.print(F("*"));
+            somethingMoved = false;
+          }
+          
+          if (itemSelected)
+          {
+            if (feederNumber == 1 && experiment.useFeederOne) // Doesn't set value unless user selects 'Yes' on next page. Used only for navigation
+              experiment.feederOneLapCountType = 2;
+            if (feederNumber == 2 && experiment.useFeederTwo)
+              experiment.feederTwoLapCountType = 2;
+            changeScreenForward();
+            pageTransition();
+            itemSelected = false;
+          }
+        break;
+      }
+    break;
+  }
+}
+
+void lapChoice(void)  // Complete
+{
+  uint8_t cursorArray[2][2] = {{1, 2}, {14, 2}};
+  arrayLength = 2;
+  uint8_t lapCountType = 0;
+  if (feederNumber == 1 && experiment.useFeederOne)
+    lapCountType = experiment.feederOneLapCountType;
+  if (feederNumber == 2 && experiment.useFeederTwo)
+    lapCountType = experiment.feederTwoLapCountType;
+    
+  switch (!setPage)
+  {
+    case 0:
+      // Cursor and Page Navigation
+      counterType = lap;
+      clickType = itemClick;
+      updateType = updateLcd;
+      bounds = 0;
+      lapCount = 1; // Working variable
+      oldCursorIndex = 1;
+      nextPage = feederSetupPage;
+      prevPage = lapsForRewardPage;
+
+      lcd.clear();
+      pageTransition();
+    break;
+    case 1:
+      switch (lapCountType)  // Discrete Value
+      {
+        case 0:
+          switch (!leavePage)
+          {
+            case 0:
+              lcd.setCursor(15, 3);
+              lcd.print(F("*"));
+              
+              if (itemSelected)
+              {
+                if (feederNumber == 1 && experiment.useFeederOne)
+                  experiment.feederOneNumberOfLaps = lapCount;
+                if (feederNumber == 2 && experiment.useFeederTwo)
+                  experiment.feederTwoNumberOfLaps = lapCount;
+                changeScreenForward();
+                pageTransition();
+                leavePage = false;
+                itemSelected = false;
+              }
+            break;
+            case 1:
+              if (somethingMoved)
+              {
+                lcd.setCursor(0, 0);
+                lcd.print(F("Set Number of Laps"));
+                lcd.setCursor(0, 1);
+                lcd.print(F("for Reward:"));
+                lcd.setCursor(12, 1);
+                lcd.print(lapCount);
+                lcd.setCursor(16, 3);
+                lcd.print(F("Done"));
+                somethingMoved = false;
+              }
+              
+              if (itemSelected)
+              {
+                leavePage = true;
+                itemSelected = false;
+              }
+            break;
+          }
+        break;
+        case 1: // Random Value
+          switch (!leavePage)
+          {
+            case 0:
+              lcd.setCursor(15, 3);
+              lcd.print(F("*"));
+              
+              if (itemSelected)
+              {
+                changeScreenForward();
+                pageTransition();
+                leavePage = false;
+                itemSelected = false;
+              }
+            break;
+            case 1:
+              if (somethingMoved)
+              {
+                lcd.setCursor(0, 0);
+                lcd.print(F("Set Range for Random"));
+                lcd.setCursor(0, 1);
+                lcd.print(F("Number of Laps."));
+                lcd.setCursor(8, 2);
+                lcd.print(F("<->"));;
+                lcd.setCursor(16, 3);
+                lcd.print(F("Done"));
+                somethingMoved = false;
+              }
+              
+              switch (bounds)
+              {
+                case 0: // lower bound
+                  lcd.setCursor(7, 2);
+                  lcd.print(lapCount);
+                  
+                  if (itemSelected)
+                  {
+                    if (feederNumber == 1 && experiment.useFeederOne)
+                      experiment.feederOneLowBoundLaps = lapCount;
+                    if (feederNumber == 2 && experiment.useFeederTwo)
+                      experiment.feederTwoLowBoundLaps = lapCount;
+                    lapCount = 1;
+                    bounds = 1;    
+                    itemSelected = false;
+                  }
+                break;
+                case 1:  // Upper bound
+                  lcd.setCursor(11, 2);
+                  lcd.print(lapCount);
+                  
+                  if (itemSelected)
+                  {
+                    if (feederNumber == 1 && experiment.useFeederOne)
+                      experiment.feederOneHighBoundLaps = lapCount;
+                    if (feederNumber == 2 && experiment.useFeederTwo)
+                      experiment.feederTwoHighBoundLaps = lapCount;
+                    if (experiment.feederOneLowBoundLaps > experiment.feederOneHighBoundLaps)
+                    {
+                      uint8_t boundBuff = experiment.feederOneLowBoundLaps;
+                      experiment.feederOneLowBoundLaps = experiment.feederOneHighBoundLaps;
+                      experiment.feederOneHighBoundLaps = boundBuff;
+                    }
+                    
+                    if (experiment.feederTwoLowBoundLaps > experiment.feederTwoHighBoundLaps)
+                    {
+                      uint8_t boundBuff = experiment.feederTwoLowBoundLaps;
+                      experiment.feederTwoLowBoundLaps = experiment.feederTwoHighBoundLaps;
+                      experiment.feederTwoHighBoundLaps = boundBuff;
+                    }
+                    leavePage = true;
+                    itemSelected = false;
+                  }
+                break;
+              }
+            break;
+          }
+        break;
+        case 2: // Progressive Ratio Schedule
+          if (somethingMoved)
+          {
+            counterType = numbers;
+            lcd.setCursor(0, 0);
+            lcd.print(F("Progressive Ratio"));
+            lcd.setCursor(0, 1);
+            lcd.print(F("Schedule?"));
+            lcd.setCursor(2, 2);
+            lcd.print(F("No"));
+            lcd.setCursor(15, 2);
+            lcd.print(F("Yes"));
+            // Negation purposely not placed
+          }
+          switch (cursorIndex)
+          {
+            case 0:
+              if (somethingMoved)
+              {
+                lcd.setCursor(cursorArray[cursorIndex][0],cursorArray[cursorIndex][1]);
+                lcd.print(F("*"));
+                lcd.setCursor(cursorArray[1][0],cursorArray[1][1]);
+                lcd.print(F(" "));
+                somethingMoved = false;
+              }
+              
+              if (itemSelected)
+              {
+                if (feederNumber == 1 && experiment.useFeederOne)
+                  experiment.feederOneLapCountType = 0;
+                if (feederNumber == 2 && experiment.useFeederTwo)
+                  experiment.feederTwoLapCountType = 0;
+                nextPage = lapsForRewardPage;
+                changeScreenForward();
+                pageTransition();    
+                itemSelected = false;
+              }
+            break;
+            case 1:
+              if (somethingMoved)
+              {
+                lcd.setCursor(cursorArray[cursorIndex][0],cursorArray[cursorIndex][1]);
+                lcd.print(F("*"));
+                lcd.setCursor(cursorArray[0][0],cursorArray[0][1]);
+                lcd.print(F(" "));
+                somethingMoved = false;
+              }
+              
+              if (itemSelected)
+              {
+                if (feederNumber == 1 && experiment.useFeederOne) // User made their choice
+                  experiment.feederOneLapCountType = 2;
+                if (feederNumber == 2 && experiment.useFeederTwo)
+                  experiment.feederTwoLapCountType = 2;
+                changeScreenForward();
+                pageTransition();    
+                itemSelected = false;
+              }
+            break;
+          }
+        break;
+      }
+    break;
+  }
+} 
+
+void intervalScheduleOnOff(void)  // Complete
+{
+  uint8_t cursorArray[2][2] = {{1, 1}, {14, 1}};
+  String lineItemArray[3] = {F("Discrete Value"), F("Random Value")};
+  arrayLength = 2;
+  switch (!setPage)
+  {
+    case 0:
+      // Cursor and Page Navigation
+      clickType = itemClick;
+      prevPage = feederSetupPage;
+  
+      if (somethingMoved)
+      {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print(F("Interval Schedule"));    
+        lcd.setCursor(2, 1);
+        lcd.print(F("No"));
+        lcd.setCursor(15, 1);
+        lcd.print(F("Yes"));
+        lcd.setCursor(cursorArray[cursorIndex][0],cursorArray[cursorIndex][1]);
+        lcd.print(F("*"));
+        somethingMoved = false;
+      }
+      
+      if (itemSelected)
+      {
+        switch (cursorIndex)
+        {
+          case 0:
+            if (feederNumber == 1 && experiment.useFeederOne)
+              experiment.feederOneIntervalSchedule = false;
+            if (feederNumber == 2 && experiment.useFeederTwo)
+              experiment.feederTwoIntervalSchedule = false;
+            
+            nextPage = feederSetupPage;
+            changeScreenForward();
+          break;
+          case 1:
+            updateType = updateLcd;
+            cursorIndex = 0;
+            oldCursorIndex = 0;
+            line = 1;
+            
+            if (feederNumber == 1 && experiment.useFeederOne)
+              experiment.feederOneIntervalSchedule = true;
+            if (feederNumber == 2 && experiment.useFeederTwo)
+              experiment.feederTwoIntervalSchedule = true;
+            
+            nextPage = intervalSchedulePage;
+            somethingMoved = true;
+            chooseRange = true;
+          break;
+        }
+        itemSelected = false;
+      }
+      pageTransition();
+    break;
+    case 1:
+      if (chooseRange)
+      {
+        if (somethingMoved)
+        {
+          lcd.setCursor(1, 2);
+          lcd.print(lineItemArray[lineIndex]);
+          lcd.setCursor(1, 3);
+          lcd.print(lineItemArray[lineIndex + 1]); 
+          // Negation purposely not placed
+        }        
+        switch (line) 
+        {
+          case 1: // Discrete 
+            if (somethingMoved)
+            {
+              lcd.setCursor(0, 2);
+              lcd.print(F("*"));
+              lcd.setCursor(0, 3);
+              lcd.print(F(" "));
+              somethingMoved = false;
+            }
+
+            if (itemSelected)
+            {
+              if (feederNumber == 1 && experiment.useFeederOne)
+                experiment.feederOneIntervalScheduleType = false;
+              if (feederNumber == 2 && experiment.useFeederTwo)
+                experiment.feederTwoIntervalScheduleType = false;
+              changeScreenForward();
+              pageTransition();
+              chooseRange = false;
+              itemSelected = false;
+            }
+          break;
+          case 2: // Random
+            if (somethingMoved)
+            {
+              lcd.setCursor(0, 3);
+              lcd.print(F("*"));
+              lcd.setCursor(0, 2);
+              lcd.print(F(" "));
+              somethingMoved = false;
+            }
+
+            if (itemSelected)
+            {
+              if (feederNumber == 1 && experiment.useFeederOne)
+                experiment.feederOneIntervalScheduleType = true;
+              if (feederNumber == 2 && experiment.useFeederTwo)
+                experiment.feederTwoIntervalScheduleType = true;
+              changeScreenForward();
+              pageTransition();
+              chooseRange = false;
+              itemSelected = false;
+            }
+          break;
+        }
+      }
+    break;
+  }
+}
+
+void intervalSchedule(void) // Complete
+{
+  uint8_t cursorArray[2][2] = {{0, 2}, {15, 3}};
+  arrayLength = 2;
+  bool intervalScheduleType = false;
+  if (feederNumber == 1 && experiment.useFeederOne)
+    intervalScheduleType = experiment.feederOneIntervalScheduleType;
+  if (feederNumber == 2 && experiment.useFeederTwo)
+    intervalScheduleType = experiment.feederTwoIntervalScheduleType;
+  switch (!setPage)
+  {
+    case 0:
+      // Cursor and Page Navigation
+      counterType = interval;
+      clickType = itemClick;
+      updateType = updatePage;
+      bounds = 0;
+      intervalSecondsCount = 0;
+      intervalTenSecondsCount = 0;
+      intervalMinutesCount = 0;
+      nextPage = feederSetupPage;
+      prevPage = intervalScheduleOnOffPage;
+
+      lcd.clear();
+      pageTransition();
+    break;
+    case 1:
+      switch (intervalScheduleType)  
+      {
+        case 0: // Discrete Value
+          switch (!leavePage)
+          {
+            case 0:
+              lcd.setCursor(cursorArray[1][0], cursorArray[1][1]);
+              lcd.print(F("*"));
+              
+              if (itemSelected)
+              {
+                if (feederNumber == 1 && experiment.useFeederOne)
+                  experiment.feederOneIntervalTime = convertTimeToInt(0, intervalMinutesCount, intervalTenSecondsCount, intervalSecondsCount);
+                if (feederNumber == 2 && experiment.useFeederTwo)
+                  experiment.feederTwoIntervalTime = convertTimeToInt(0, intervalMinutesCount, intervalTenSecondsCount, intervalSecondsCount);
+                changeScreenForward();
+                pageTransition();
+                leavePage = false;
+                itemSelected = false;
+              }
+            break;
+            case 1:
+              lcd.setCursor(0, 0);
+              lcd.print(F("Set Time Interval"));
+              lcd.setCursor(0, 2);
+              lcd.print(F(">"));
+              lcd.print(intervalMinutesCount);
+              lcd.print(F(":"));
+              lcd.print(intervalTenSecondsCount);
+              lcd.print(intervalSecondsCount);
+              lcd.setCursor(16, 3);
+              lcd.print(F("Done"));
+              
+              if (itemSelected)
+              {
+                leavePage = true;
+                itemSelected = false;
+              }
+            break;
+          }
+        break;
+        case 1: // Random Value
+          switch (!leavePage)
+          {
+            case 0:
+              lcd.setCursor(cursorArray[1][0], cursorArray[1][1]);
+              lcd.print(F("*"));
+              
+              if (itemSelected)
+              {
+                changeScreenForward();
+                pageTransition();
+                leavePage = false;
+                itemSelected = false;
+              }
+            break;
+            case 1:
+              if (somethingMoved)
+              {
+                lcd.setCursor(0, 0);
+                lcd.print(F("Set Range for Random"));
+                lcd.setCursor(0, 1);
+                lcd.print(F("Time Interval"));
+                lcd.setCursor(8, 2);
+                lcd.print(F("<->"));;
+                lcd.setCursor(16, 3);
+                lcd.print(F("Done"));
+                somethingMoved = false;
+              }
+              
+              switch (bounds)
+              {
+                case 0: // lower bound
+                lcd.setCursor(4, 2);
+                lcd.print(intervalMinutesCount);
+                lcd.print(F(":"));
+                lcd.print(intervalTenSecondsCount);
+                lcd.print(intervalSecondsCount);
+                
+                if (itemSelected)
+                {
+                  if (feederNumber == 1 && experiment.useFeederOne)
+                    experiment.feederOneLowBoundOfInterval = convertTimeToInt(0, intervalMinutesCount, intervalTenSecondsCount, intervalSecondsCount);
+                  if (feederNumber == 2 && experiment.useFeederTwo)
+                    experiment.feederTwoLowBoundOfInterval = convertTimeToInt(0, intervalMinutesCount, intervalTenSecondsCount, intervalSecondsCount);
+                  bounds = 1;    
+                  itemSelected = false;
+                }
+                break;
+                case 1:  // Upper bound
+                  lcd.setCursor(11, 2);
+                  lcd.print(intervalMinutesCount);
+                  lcd.print(F(":"));
+                  lcd.print(intervalTenSecondsCount);
+                  lcd.print(intervalSecondsCount);
+                  
+                  if (itemSelected)
+                  {
+                    if (feederNumber == 1 && experiment.useFeederOne)
+                      experiment.feederOneHighBoundOfInterval = convertTimeToInt(0, intervalMinutesCount, intervalTenSecondsCount, intervalSecondsCount);
+                    if (feederNumber == 2 && experiment.useFeederTwo)
+                      experiment.feederTwoHighBoundOfInterval = convertTimeToInt(0, intervalMinutesCount, intervalTenSecondsCount, intervalSecondsCount);
+                    if (experiment.feederOneLowBoundOfInterval > experiment.feederOneHighBoundOfInterval)
+                    {
+                      uint8_t boundBuff = experiment.feederOneLowBoundOfInterval;
+                      experiment.feederOneLowBoundOfInterval = experiment.feederOneHighBoundOfInterval;
+                      experiment.feederOneHighBoundOfInterval = boundBuff;
+                    }
+                    if (experiment.feederTwoLowBoundOfInterval > experiment.feederTwoHighBoundOfInterval)
+                    {
+                      uint8_t boundBuff = experiment.feederTwoLowBoundOfInterval;
+                      experiment.feederTwoLowBoundOfInterval = experiment.feederTwoHighBoundOfInterval;
+                      experiment.feederTwoHighBoundOfInterval = boundBuff;
+                    }
+                    leavePage = true;
+                    itemSelected = false;
+                  }
+                break;
+              }
+            break;
+          }
+        break;
+      }
+    break;
+  }
+}
+
+void settings(void) // Complete
+{
+  String lineItemArray[3] = {F("Rename Experiments"), F("View Exp. Details"), F("Reset to Defaults")};
+  arrayLength = 3;
+  switch (!setPage)
+  {
+    case 0:
+      clickType = itemClick;
+      prevPage = mainPage;
+
+      if (somethingMoved)
+      {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print(F("SETTINGS"));
+        lcd.setCursor(1, 1);
+        lcd.print(lineItemArray[lineIndex]);
+        lcd.setCursor(1, 2);
+        lcd.print(lineItemArray[lineIndex + 1]);
+        lcd.setCursor(1, 3);
+        lcd.print(lineItemArray[lineIndex + 2]);
+        lcd.setCursor(0, line);
+        lcd.print(F("*"));
+        somethingMoved = false;
+      }
+
+      pageTransition();
+    break;
+    case 1:
+      if (itemSelected)
+      {
+        switch (cursorIndex)
+        {
+          case 0:
+            chooseExpCalledFrom = settingsPage;
+            nextPage = chooseExpPage;
+          break;
+          case 1:
+            chooseExpCalledFrom = (settingsPage + 1);
+            nextPage = chooseExpPage;
+          break;
+          case 2:
+            nextPage = resetDevicePage;
+          break;
+        }
+        changeScreenForward();
+        pageTransition();
+        itemSelected = false;
+      }
+    break;
+  }
+  delayMicroseconds(5000); // Needed for stability
+}
+
+void expDetails(void)
+{
+  uint8_t subPageArray[3];
+  if (somethingMoved)
+  {
+    if (experiment.useFeederOne && experiment.useFeederTwo)
+    {
+      for (uint8_t i = 0; i < 3; i++)
+      {
+        subPageArray[i] = i;
+      }
+      arrayLength = 3;
+    }
+    else 
+    {
+      subPageArray[0] = 0;
+      experiment.useFeederOne ? subPageArray[1] = 1 : subPageArray[1] = 2;
+      arrayLength = 2;
+    }
+  }
+  switch (!setPage)
+  {
+    case 0:
+      nextPage = settingsPage;
+      prevPage = settingsPage;
+     
+      pageTransition();
+    break;
+    case 1:
+      switch (subPageArray[cursorIndex])
+      {
+        case 0:
+          if (somethingMoved)
+            {
+              lcd.clear();
+              lcd.setCursor(0, 0);
+              lcd.print(F("Experiment"));
+              lcd.setCursor(11, 0);
+              lcd.print(expChoice);
+              lcd.setCursor(13, 0);
+              lcd.print(F("Details"));
+              
+              lcd.setCursor(0, 1);
+              lcd.print(F("Both Feeders: "));
+              experiment.useFeederOne && experiment.useFeederTwo ? lcd.print(F("Yes")): lcd.print(F("No")); 
+    
+              lcd.setCursor(0, 3);
+              lcd.print(F("More -->"));
+              somethingMoved = false;
+            }
+        break;
+        case 1: // Feeder One
+          if (somethingMoved)
+          {            
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print(F("Feeder 1"));
+            
+            lcd.setCursor(0, 1);
+            lcd.print(F("Num Pellets: "));
+            if (!experiment.feederOnePelletCountType)
+            {
+              lcd.print(experiment.feederOneNumberOfPellets);
+            }
+            else
+            {
+              lcd.print(experiment.feederOneLowBoundPellets);
+              lcd.print(F("<->"));
+              lcd.print(experiment.feederOneHighBoundPellets);
+            }
+            
+            lcd.setCursor(0, 2);
+            lcd.print(F("Num Laps: "));
+            if (experiment.feederOneLapCountType == 0)
+            {
+              lcd.print(experiment.feederOneNumberOfLaps);
+            }
+            else if (experiment.feederOneLapCountType == 1)
+            {
+              lcd.print(experiment.feederOneLowBoundLaps);
+              lcd.print(F("<->"));
+              lcd.print(experiment.feederOneHighBoundLaps);
+            }
+            else if (experiment.feederOneLapCountType == 2)
+            {
+              lcd.print(F("Prog.Ratio"));
+            }
+
+            lcd.setCursor(0, 3);
+            lcd.print(F("Int Sch: "));
+            if (!experiment.feederOneIntervalSchedule)
+            {
+              lcd.print(F("No"));
+            }
+            else 
+            {
+              if (!experiment.feederOneIntervalScheduleType)
+              {
+                timeToConvert = convertIntToTime(experiment.feederOneIntervalTime);
+                lcd.print(timeToConvert.minutes);
+                lcd.print(F(":"));
+                lcd.print(timeToConvert.tenSeconds); 
+                lcd.print(timeToConvert.seconds);
+              }
+              else 
+              {
+                timeToConvert = convertIntToTime(experiment.feederOneLowBoundOfInterval);
+                lcd.print(timeToConvert.minutes);
+                lcd.print(F(":"));
+                lcd.print(timeToConvert.tenSeconds);
+                lcd.print(timeToConvert.seconds);
+                lcd.print(F("<->"));
+                timeToConvert = convertIntToTime(experiment.feederOneHighBoundOfInterval);
+                lcd.print(timeToConvert.minutes);
+                lcd.print(F(":"));
+                lcd.print(timeToConvert.tenSeconds);
+                lcd.print(timeToConvert.seconds);
+              }
+            }
+            somethingMoved = false;
+          }
+        break;
+        case 2: // Feeder 2
+          if (somethingMoved)
+          {            
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print(F("Feeder 2"));
+            
+            lcd.setCursor(0, 1);
+            lcd.print(F("Num Pellets: "));
+            if (!experiment.feederTwoPelletCountType)
+            {
+              lcd.print(experiment.feederTwoNumberOfPellets);
+            }
+            else
+            {
+              lcd.print(experiment.feederTwoLowBoundPellets);
+              lcd.print(F("<->"));
+              lcd.print(experiment.feederTwoHighBoundPellets);
+            }
+            
+            lcd.setCursor(0, 2);
+            lcd.print(F("Num Laps: "));
+            if (experiment.feederTwoLapCountType == 0)
+            {
+              lcd.print(experiment.feederTwoNumberOfLaps);
+            }
+            else if (experiment.feederTwoLapCountType == 1)
+            {
+              lcd.print(experiment.feederTwoLowBoundLaps);
+              lcd.print(F("<->"));
+              lcd.print(experiment.feederTwoHighBoundLaps);
+            }
+            else if (experiment.feederTwoLapCountType == 2)
+            {
+              lcd.print(F("Prog.Ratio"));
+            }
+
+            lcd.setCursor(0, 3);
+            lcd.print(F("Int Sch: "));
+            if (!experiment.feederTwoIntervalSchedule)
+            {
+              lcd.print(F("No"));
+            }
+            else 
+            {
+              if (!experiment.feederTwoIntervalScheduleType)
+              {
+                timeToConvert = convertIntToTime(experiment.feederTwoIntervalTime);
+                lcd.print(timeToConvert.minutes);
+                lcd.print(F(":"));
+                lcd.print(timeToConvert.tenSeconds); 
+                lcd.print(timeToConvert.seconds);
+              }
+              else 
+              {
+                timeToConvert = convertIntToTime(experiment.feederTwoLowBoundOfInterval);
+                lcd.print(timeToConvert.minutes);
+                lcd.print(F(":"));
+                lcd.print(timeToConvert.tenSeconds);
+                lcd.print(timeToConvert.seconds);
+                lcd.print(F("<->"));
+                timeToConvert = convertIntToTime(experiment.feederTwoHighBoundOfInterval);
+                lcd.print(timeToConvert.minutes);
+                lcd.print(F(":"));
+                lcd.print(timeToConvert.tenSeconds);
+                lcd.print(timeToConvert.seconds);
+              }
+            }
+            somethingMoved = false;
+          }
+        break;
+      }
+    break;
+  }
+}
+
+void resetDevice(void)
+{
+  String lineItemArray[3] = {F("Exp names"), F("Exp parameters"), F("Both")};
+  arrayLength = 3;
+  switch (!setPage)
+  {
+    case 0:
+      resetCalledFrom = resetDevicePage;
+      nextPage = areYouSureResetPage;
+      prevPage = settingsPage;
+      clickType = itemClick;
+      
+      if (somethingMoved)
+      {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print(F("RESET TO DEFAULTS"));
+        lcd.setCursor(1, 1);
+        lcd.print(lineItemArray[lineIndex]);
+        lcd.setCursor(1, 2);
+        lcd.print(lineItemArray[lineIndex + 1]);
+        lcd.setCursor(1, 3);
+        lcd.print(lineItemArray[lineIndex + 2]);
+        lcd.setCursor(0, line);
+        lcd.print(F("*"));
+        somethingMoved = false;
+      }
+
+      pageTransition();
+    break;
+    case 1:
+      if (itemSelected)
+      {
+        switch (cursorIndex)
+        {
+          case 0:
+            whatToReset = 0;  // Experiment names
+          break;
+          case 1:
+            whatToReset = 1; // Experiment Parameters
+          break;
+          case 2:
+            whatToReset = 2;  // Both
+          break;
+        }
+        changeScreenForward();
+        pageTransition();
+        itemSelected = false;
+      }
+    break;
+  }
+  delayMicroseconds(5000);
+}
+
+void areYouSureReset(void)
+{
+  uint8_t cursorArray[2][2] = {{1, 2}, {14, 2}};
+  arrayLength = 2;
+  switch (!setPage)
+  {
+    case 0:
+      if (somethingMoved)
+      {
+        counterType = numbers;
+        clickType = itemClick;
+        resetPathMemory();
+        
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        if (prevPage == expDisplayPage)
+          lcd.print(F("Reset Experiment"));
+        if (prevPage == resetDevicePage)
+          lcd.print(F("Reset Memory"));
+        lcd.setCursor(0, 1);
+        lcd.print(F("Are you sure?"));
+        lcd.setCursor(2, 2);
+        lcd.print(F("No"));
+        lcd.setCursor(15, 2);
+        lcd.print(F("Yes"));
+        lcd.setCursor(cursorArray[cursorIndex][0],cursorArray[cursorIndex][1]);
+        lcd.print(F("*"));
+        somethingMoved = false;
+      }
+
+      pageTransition();
+    break;
+    case 1:
+      switch (cursorIndex)
+      {
+        case 0:          
+          if (itemSelected)
+          {
+            changeScreenForward();
+            pageTransition();    
+            itemSelected = false;
+          }
+        break;
+        case 1:          
+          if (itemSelected)
+          {
+            if (prevPage == resetDevicePage)
+            {
+              if (whatToReset == 0 || whatToReset == 2)
+                resetNames();
+              if (whatToReset == 1 || whatToReset == 2)
+                resetExps();
+            }
+            if (prevPage == expDisplayPage)
+            {
+              resetExperiment();
+            }
+            changeScreenForward();
+            pageTransition();    
+            itemSelected = false;
+          }
+        break;
+      }
+    break;
+  }
+  delayMicroseconds(5000);
+}
+
+void expName(void)  // Complete
+{
+  uint8_t cursorArray[10][2] = {{1, 3}, {2, 3}, {3, 3}, {4, 3}, {5, 3}, {6, 3}, {7, 3}, {8, 3}, {9, 3}, {15, 3}};
+  arrayLength = 10;
+  switch (!setPage)
+  {
+    case 0: // Setup page and set conditions for item interactions
+      updateType = updateLcd;
+      clickType = itemClick;
+      prevPage = chooseExpPage;
+      moveChar = true;
+      lcd.cursor();
+  
+      // LCD Output
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(F("New name for exp."));
+      lcd.setCursor(18, 0);
+      lcd.print(expChoice);
+      lcd.setCursor(0, 1);
+      lcd.print(F("Nine characters max"));
+      lcd.setCursor(0, 3);
+      lcd.print(F(">"));
+      for (int i = 0; i < 9; i++)
+      {
+        lcd.setCursor(cursorArray[i][0], cursorArray[i][1]);
+        lcd.print(newName[i]);
+      }
+      lcd.setCursor(16, 3);
+      lcd.print(F("Done"));
+      pageTransition();
+    break;
+    case 1: // Page interactions
+      switch (!moveChar)  // Switch between moving the cursor and changing individual chars
+      {
+        case 0: // Moving the cursor
+          lcd.setCursor(cursorArray[cursorIndex][0], cursorArray[cursorIndex][1]);
+          
+          if (cursorIndex == (arrayLength - 1) && eraseCursor)
+          {
+            lcd.setCursor(15, 3);
+            lcd.print(F("*"));
+            lcd.noCursor();
+            eraseCursor = false;
+          } 
+          else if (cursorIndex != (arrayLength - 1) && !eraseCursor)
+          {
+            lcd.setCursor(15, 3);
+            lcd.print(F(" "));
+            lcd.cursor();
+            eraseCursor = true;
+          }
+          
+          if (itemSelected)
+          {
+            cursorIndex == (arrayLength - 1)? leavePage = true: leavePage = false;
+            cursorLocation = cursorIndex;
+            counterType = characters;
+            moveChar = false;
+            itemSelected = false;
+            lcd.noCursor();
+          }
+        break;
+        case 1: // Changing chars
+          lcd.setCursor(cursorArray[cursorLocation][0], cursorArray[cursorLocation][1]);
+          if (cursorIndex != (arrayLength - 1))
+            lcd.print(characterArray[charCount]);
+          
+          if (leavePage)
+          {
+            saveName();
+            nextPage = mainPage;
+            changeScreenForward();
+            pageTransition();
+            leavePage = false;            
+          }
+          
+          if (itemSelected)
+          {
+            if (cursorLocation != (arrayLength - 1))
+              newName[cursorLocation] = characterArray[charCount];
+            charCount = 0;
+            cursorIndex = cursorLocation;
+            moveChar = true;
+            lcd.cursor();
+            counterType = numbers;
+            itemSelected = false;                  
+          } 
+        break;
+      }
+    break;
+  }
+}
+////////////////////////////////////////////////////////////////////////////////////////
+
+// ********** Counters **********
+void countUp(void)  // Complete
+{
+  switch (counterType)
+  {
+    case numbers:
+      countUpNum();
+    break;
+    case characters:
+      countUpChar();
+    break;
+    case pellet:
+      countUpPellets();
+    break;
+    case lap:
+      countUpLaps();
+    break;
+    case interval:
+      countUpInterval();
+    break;
+    default:
+      countUpNum();
+    break;
+  }
+  indexControl(); // Prevents general counter from exceeding array length
+  lineTracker();  // Allows cursor to move freely up and down
+  lineIndexControl(); // Moves the menu rolodex 
+}
+
+void countDown(void)  // Complete
+{
+  switch (counterType)
+  {
+    case numbers:
+      countDownNum();
+    break;
+    case characters:
+      countDownChar();
+    break;
+    case pellet:
+      countDownPellets();
+    break;
+    case lap:
+      countDownLaps();
+    break;
+    case interval:
+      countDownInterval();
+    break;
+    default:
+      countDownNum();
+    break;
+  }
+  lineTracker();  // Allows cursor to move freely up and down
+  lineIndexControl(); // Moves the menu rolodex
+}
+
+void countUpNum(void) // Complete
+{
+  cursorIndex++;
+  if (cursorIndex > 99) // Set upper bound of 'cursorIndex' to 99
+    cursorIndex = 99;
+}
+
+void countDownNum(void) // Complete
+{
+  cursorIndex--;
+  if (cursorIndex <= 0) // Set lower bound of 'cursorIndex' to 0
+    cursorIndex = 0;
+}
+
+void countUpChar(void)  // Complete
+{
+  charCount++;
+  if (charCount > 89)
+    charCount = 0;
+}
+
+void countDownChar(void)  // Complete
+{
+  charCount--;
+  if (charCount <= 0)
+    charCount = 89;
+}
+
+void countUpPellets(void) // Complete
+{
+  pelletCount++;
+  if (pelletCount > 9)
+    pelletCount = 9;
+}
+
+void countDownPellets(void) // Complete
+{
+  pelletCount--;
+  if (pelletCount <= 1)
+    pelletCount = 1;
+}
+
+void countUpLaps(void)  // Complete
+{
+  lapCount++;
+  if (lapCount > 9)
+    lapCount = 9;
+}
+
+void countDownLaps(void)  // Complete
+{
+  lapCount--;
+  if (lapCount <= 1)
+    lapCount = 1;
+}
+
+void countUpInterval(void)  // Complete
+{
+  intervalSecondsCount++;
+  if (intervalSecondsCount > 9)
+  {
+    intervalSecondsCount = 0;
+    intervalTenSecondsCount++;
+  }
+  if (intervalTenSecondsCount > 5)
+  {
+    intervalTenSecondsCount = 0;
+    intervalMinutesCount++;
+  }
+  if (intervalMinutesCount > 9)
+    intervalMinutesCount = 0;
+}
+
+void countDownInterval(void)  // Complete
+{
+  intervalSecondsCount--;
+  if (intervalSecondsCount < 0)
+  {
+    intervalSecondsCount = 9;
+    intervalTenSecondsCount--;
+  }
+  if (intervalTenSecondsCount < 0)
+  {
+    intervalTenSecondsCount = 5;
+    intervalMinutesCount--;
+  }
+  if (intervalMinutesCount < 0)
+    intervalMinutesCount = 9;
+}
+
+void countUpTime(void)  // Complete
+{
+  secondsCounter++;
+  if (secondsCounter > 9)
+  {
+    secondsCounter = 0;
+    tenSecondCounter++;
+  }
+  if (tenSecondCounter > 5)
+  {
+    tenSecondCounter = 0;
+    minutesCounter++;
+  }
+  if (minutesCounter > 9)
+  {
+    minutesCounter = 0;
+    tenMinuteCounter++;
+  }
+  if (tenMinuteCounter > 5)
+    tenMinuteCounter = 0;
+}
+
+// ********** Converters **********
+int convertTimeToInt(uint8_t tenMins, uint8_t mins, uint8_t tenSec, uint8_t secs)  // Complete
+{
+  return (tenMins * 1000) + (mins * 100) + (tenSec * 10) + secs;
+}
+
+Time convertIntToTime(uint16_t _time)  // Complete
+{
+  Time times;
+  times.tenMinutes = _time / 1000;
+  times.minutes = (_time - (times.tenMinutes * 1000)) / 100;
+  times.tenSeconds = (_time - (times.tenMinutes * 1000) - (times.minutes * 100)) / 10;
+  times.seconds = _time - (times.tenMinutes * 1000) - (times.minutes * 100) - (times.tenSeconds * 10);
+  return times;
+}
+
+// ********** Cursor Controllers **********
+void indexControl(void) // Complete
+{
+  if (cursorIndex > (arrayLength - 1))
+    cursorIndex = (arrayLength - 1);
+  if (cursorIndex < 0)
+    cursorIndex = 0;
+}
+
+void lineTracker(void)  // Keeps the cursor between row indices one and three - Complete
+{
+  if (cursorIndex > oldCursorIndex) // Rotary encoder is rotated CW (implying an increase in 'cursorIndex')
+    line++; // Move cursor down one line
+  else if (cursorIndex < oldCursorIndex)  // Rotary encoder is rotated CCW (implying an decrease in 'cursorIndex')
+    line--; // Move cursor back up one line
+  if (line >= 3)  // Keeps cursor on row index three
+    line = 3;
+  else if (line <= 1) // Keeps cursor on row index one
+    line = 1;
+  oldCursorIndex = cursorIndex; // Save previous value for comparison
+}
+
+void lineIndexControl(void) // Rolls the rolodex while cursor is kept within bounds by 'lineTracker()' - Complete
+{
+  if (line == 3 && oldLine == 3)  // If cursor is at row index 3
+  {
+    lineIndex++;  // Scroll through 'lineItemArray' to bring up more options
+    if (lineIndex >= arrayLength - 3) // Keeps 'lineIndex' within upper bounds of 'lineItemArray'
+      lineIndex = arrayLength - 3;
+    if (lineIndex < 0)  // Needed to accommodate arrayLengths less than 3
+      lineIndex = 0;
+  } 
+  else if (line == 1 && oldLine == 1) // If cursor is at row index 1
+  {
+    lineIndex--;  // Scroll back through 'lineItemArray' to bring back previous line items
+    if (lineIndex <= 0) // Keeps 'lineIndex' within lower bounds of 'lineItemArray'
+      lineIndex = 0;
+  }
+  oldLine = line; // Save previous value for comparison
+}
+
+void arrayControl(void) // For output data rolodex
+{
+  halfLapArrayLength++;
+  if (halfLapArrayLength >= (sizeof(halfLapArray) / 2) - 1)  // Prevents going out of array bounds 
+  {
+    halfLapArrayLength = (sizeof(halfLapArray) / 2) - 1;  // 'halfLapArray' has 100 elements since uint16_t
+    timerOn = false;
+    systemArmed = false;
+    digitalWrite(expRunningLED, LOW);
+    digitalWrite(expPausedLED, HIGH);
+    digitalWrite(expArmedLED, HIGH);
+  } 
+  else 
+  { 
+    if (halfLapArrayLength > 3) // Prevents all zeros being printed until RE turned
+      lineIndex++;
+    if (line < 3 && halfLapArrayLength < 3) // Moves the pointer to next line at beginning of experiment
+      line++;
+  }
+  somethingMoved = true;
+}
+
+void pointerControl(void) // 'expDisplay' page pointer handler
+{
+  if (halfLapArrayLength < 3)
+    cursorIndex = 0;
+  if (halfLapArrayLength == 3) 
+    cursorIndex = 3;
+  if (halfLapArrayLength <= 1) // Locks movement of pointer until more than 3 items exist in array
+    line = 1;
+  else if (halfLapArrayLength == 2)
+    line = 2;
+  else if (halfLapArrayLength == 3)
+    line = 3;
+
+  lcd.setCursor(0, 1);
+  lcd.print(F(" "));
+  lcd.setCursor(0, 2);
+  lcd.print(F(" "));
+  lcd.setCursor(0, 3);
+  lcd.print(F(" "));
+  lcd.setCursor(0, line);
+  lcd.print(F(">"));
+}
+
+// ********** Timer Functions **********
+void setupTimer(void) // Setup timer to generate 1Hz pulses - Complete
+{
+  cli();  // Disable interrupts
+  //set timer1 interrupt at 1Hz
+  TCCR1A = 0; // set entire TCCR1A register to 0
+  TCCR1B = 0; // same for TCCR1B
+  TCNT1  = 0; //initialize counter value to 0
+  // set compare match register for 1hz increments
+  OCR1A = 15624;  // (16 * 10^6) / (1 * 1024) - 1 (must be <65536)
+  // turn on CTC mode
+  TCCR1B |= (1 << WGM12);
+  // Set CS10 and CS12 bits for 1024 prescaler
+  TCCR1B |= (1 << CS12) | (1 << CS10);  
+  // enable timer compare interrupt
+  TIMSK1 |= (1 << OCIE1A); 
+  sei();  // Enable interrupts
+}
+
+ISR(TIMER1_COMPA_vect)  // Timer ISR - Complete
+{ 
+  if (onExpDisplayPage && systemArmed && timerOn)
+  {
+    countUpTime();
+    updatePage = true;
+    if (lightOn != oldLightOn)  // Flash
+    {
+      digitalWrite(expRunningLED, !lightOn);
+      oldLightOn = lightOn;
+    } 
+    else
+    {
+      digitalWrite(expRunningLED, lightOn);
+      oldLightOn = !lightOn;
+    }
+    if (experiment.feederOneIntervalSchedule)
+      feederOneIntervalCounter++;
+    if (experiment.feederTwoIntervalSchedule)
+      feederTwoIntervalCounter++;
+  }
+}
+
+// ********** Feeder Functions **********
+
+void runFeederOne(void)
+{
+  digitalWrite(feedOne, LOW); // Select feeder 
+  
+  digitalWrite(tinyInt, LOW); // Trigger ATTiny interrupt 
+  digitalWrite(tinyInt, HIGH);
+}
+
+void stopFeederOne(void)
+{
+  digitalWrite(feedOne, HIGH);
+
+  digitalWrite(tinyInt, LOW);
+  digitalWrite(tinyInt, HIGH);
+}
+
+void runFeederTwo(void)
+{
+  digitalWrite(feedTwo, LOW);
+  
+  digitalWrite(tinyInt, LOW);
+  digitalWrite(tinyInt, HIGH);
+}
+
+void stopFeederTwo(void)
+{
+  digitalWrite(feedTwo, HIGH);
+
+  digitalWrite(tinyInt, LOW);
+  digitalWrite(tinyInt, HIGH);
+}
+
+void stopBothFeeders(void)
+{
+  digitalWrite(feedOne, HIGH);
+  digitalWrite(feedTwo, HIGH);
+  
+  digitalWrite(tinyInt, LOW);
+  digitalWrite(tinyInt, HIGH);
+}
+
+// ********** EEPROM Functions **********
+void saveName(void) // Complete
+{
+  switch (expChoice)
+  {
+    case 1:
+      writeNameToEeprom(0, newName);
+      for (int i = 0; i < 9; i++)
+      {
+        expOne[i] = newName[i]; // Store new name
+        newName[i] = 0x00;  // Set all chars back to null
+      }
+    break;
+    case 2:
+      writeNameToEeprom(10, newName);
+      for (int i = 0; i < 9; i++)
+      {
+        expTwo[i] = newName[i];
+        newName[i] = 0x00;
+      }
+    break;
+    case 3:
+      writeNameToEeprom(20, newName);
+      for (int i = 0; i < 9; i++)
+      {
+        expThree[i] = newName[i];
+        newName[i] = 0x00;
+      }
+    break;
+    case 4:
+      writeNameToEeprom(30, newName);
+      for (int i = 0; i < 9; i++)
+      {
+        expFour[i] = newName[i];
+        newName[i] = 0x00;
+      }
+    break;
+    case 5:
+      writeNameToEeprom(40, newName);
+      for (int i = 0; i < 9; i++)
+      {
+        expFive[i] = newName[i];
+        newName[i] = 0x00;
+      }
+    break;
+    case 6:
+      writeNameToEeprom(50, newName);
+      for (int i = 0; i < 9; i++)
+      {
+        expSix[i] = newName[i];
+        newName[i] = 0x00;
+      }
+    break;
+  }
+}
+
+void readExpNames(void) // Complete
+{
+  for (int i = 0; i < 9; i++)
+    expOne[i] = readNameFromEeprom(i);
+  for (int i = 0; i < 9; i++)
+    expTwo[i] = readNameFromEeprom(i + 10);
+  for (int i = 0; i < 9; i++)
+    expThree[i] = readNameFromEeprom(i + 20);
+  for (int i = 0; i < 9; i++)
+    expFour[i] = readNameFromEeprom(i + 30);
+  for (int i = 0; i < 9; i++)
+    expFive[i] = readNameFromEeprom(i + 40);
+  for (int i = 0; i < 9; i++)
+    expSix[i] = readNameFromEeprom(i + 50);
+}
+
+// ***Write to EEPROM***
+void writeNameToEeprom(int startAddress, char charBuff[10]) // Complete
+{
+  int j = 0;  // Needed to keep array accesses between 0 - 9
+  for(int i = startAddress; i < (startAddress + 9); i++) 
+  {
+    EEPROM.write(i, charBuff[j]);
+    j++;
+  }
+}
+
+// ***Read from EEPROM***
+char readNameFromEeprom(uint8_t address)  // Complete
+{  
+  return EEPROM.read(address);  
+}
+
+void saveExperimentToEEPROM(void) // Complete
+{
+  uint8_t addr = 0;
+  switch (expChoice)
+  {
+    case 1:
+      addr = 60;  // Starting address
+    break;
+    case 2:
+      addr = 94;  // Add 34 and start on the next byte
+    break;
+    case 3:
+      addr = 128;
+    break;
+    case 4:
+      addr = 162;
+    break;
+    case 5:
+      addr = 196;
+    break;
+    case 6:
+      addr = 230;
+    break;
+  }
+  
+  EEPROM.write(addr,      uint8_t(experiment.useFeederOne));
+  EEPROM.write(addr + 1,  uint8_t(experiment.feederOnePelletCountType));
+  EEPROM.write(addr + 2,  experiment.feederOneNumberOfPellets);
+  EEPROM.write(addr + 3,  experiment.feederOneLowBoundPellets);
+  EEPROM.write(addr + 4,  experiment.feederOneHighBoundPellets);
+  EEPROM.write(addr + 5,  experiment.feederOneLapCountType);
+  EEPROM.write(addr + 6,  experiment.feederOneNumberOfLaps);
+  EEPROM.write(addr + 7,  experiment.feederOneLowBoundLaps);
+  EEPROM.write(addr + 8,  experiment.feederOneHighBoundLaps);
+  EEPROM.write(addr + 9,  uint8_t(experiment.feederOneIntervalSchedule));
+  EEPROM.write(addr + 10, uint8_t(experiment.feederOneIntervalScheduleType));
+  EEPROM.write(addr + 11, highByte(experiment.feederOneIntervalTime));
+  EEPROM.write(addr + 12, lowByte(experiment.feederOneIntervalTime));
+  EEPROM.write(addr + 13, highByte(experiment.feederOneLowBoundOfInterval));
+  EEPROM.write(addr + 14, lowByte(experiment.feederOneLowBoundOfInterval));
+  EEPROM.write(addr + 15, highByte(experiment.feederOneHighBoundOfInterval));
+  EEPROM.write(addr + 16, lowByte(experiment.feederOneHighBoundOfInterval));
+
+  EEPROM.write(addr + 17, uint8_t(experiment.useFeederTwo));
+  EEPROM.write(addr + 18, uint8_t(experiment.feederTwoPelletCountType));
+  EEPROM.write(addr + 19, experiment.feederTwoNumberOfPellets);
+  EEPROM.write(addr + 20, experiment.feederTwoLowBoundPellets);
+  EEPROM.write(addr + 21, experiment.feederTwoHighBoundPellets);
+  EEPROM.write(addr + 22, experiment.feederTwoLapCountType);
+  EEPROM.write(addr + 23, experiment.feederTwoNumberOfLaps);
+  EEPROM.write(addr + 24, experiment.feederTwoLowBoundLaps);
+  EEPROM.write(addr + 25, experiment.feederTwoHighBoundLaps);
+  EEPROM.write(addr + 26, uint8_t(experiment.feederTwoIntervalSchedule));
+  EEPROM.write(addr + 27, uint8_t(experiment.feederTwoIntervalScheduleType));
+  EEPROM.write(addr + 28, highByte(experiment.feederTwoIntervalTime));
+  EEPROM.write(addr + 29, lowByte(experiment.feederTwoIntervalTime));
+  EEPROM.write(addr + 30, highByte(experiment.feederTwoLowBoundOfInterval));
+  EEPROM.write(addr + 31, lowByte(experiment.feederTwoLowBoundOfInterval));
+  EEPROM.write(addr + 32, highByte(experiment.feederTwoHighBoundOfInterval));
+  EEPROM.write(addr + 33, lowByte(experiment.feederTwoHighBoundOfInterval));
+}
+
+void readExperimentFromEEPROM(void) // Complete
+{
+  uint8_t addr = 0;
+  switch (expChoice)
+  {
+    case 1:
+      addr = 60;  // Starting address
+    break;
+    case 2:
+      addr = 94;  // Add 34 and start on the next byte
+    break;
+    case 3:
+      addr = 128;
+    break;
+    case 4:
+      addr = 162;
+    break;
+    case 5:
+      addr = 196;
+    break;
+    case 6:
+      addr = 230;
+    break;
+  }
+
+  experiment.useFeederOne = bool(EEPROM.read(addr));
+  experiment.feederOnePelletCountType = bool(EEPROM.read(addr + 1));
+  experiment.feederOneNumberOfPellets = EEPROM.read(addr + 2);
+  experiment.feederOneLowBoundPellets = EEPROM.read(addr + 3);
+  experiment.feederOneHighBoundPellets = EEPROM.read(addr + 4);
+  experiment.feederOneLapCountType = EEPROM.read(addr + 5);
+  experiment.feederOneNumberOfLaps = EEPROM.read(addr + 6);
+  experiment.feederOneLowBoundLaps = EEPROM.read(addr + 7);
+  experiment.feederOneHighBoundLaps = EEPROM.read(addr + 8);
+  experiment.feederOneIntervalSchedule = bool(EEPROM.read(addr + 9));
+  experiment.feederOneIntervalScheduleType = bool(EEPROM.read(addr + 10));
+  experiment.feederOneIntervalTime |= uint16_t(EEPROM.read(addr + 11)) << 8;
+  experiment.feederOneIntervalTime |= EEPROM.read(addr + 12);
+  experiment.feederOneLowBoundOfInterval |= uint16_t(EEPROM.read(addr + 13)) << 8;
+  experiment.feederOneLowBoundOfInterval |= EEPROM.read(addr + 14);
+  experiment.feederOneHighBoundOfInterval |= uint16_t(EEPROM.read(addr + 15)) << 8;
+  experiment.feederOneHighBoundOfInterval |= EEPROM.read(addr + 16);
+
+  experiment.useFeederTwo = bool(EEPROM.read(addr + 17));
+  experiment.feederTwoPelletCountType = bool(EEPROM.read(addr + 18));
+  experiment.feederTwoNumberOfPellets = EEPROM.read(addr + 19);
+  experiment.feederTwoLowBoundPellets = EEPROM.read(addr + 20);
+  experiment.feederTwoHighBoundPellets = EEPROM.read(addr + 21);
+  experiment.feederTwoLapCountType = EEPROM.read(addr + 22);
+  experiment.feederTwoNumberOfLaps = EEPROM.read(addr + 23);
+  experiment.feederTwoLowBoundLaps = EEPROM.read(addr + 24);
+  experiment.feederTwoHighBoundLaps = EEPROM.read(addr + 25);
+  experiment.feederTwoIntervalSchedule = bool(EEPROM.read(addr + 26));
+  experiment.feederTwoIntervalScheduleType = bool(EEPROM.read(addr + 27));
+  experiment.feederTwoIntervalTime |= uint16_t(EEPROM.read(addr + 28)) << 8;
+  experiment.feederTwoIntervalTime |= EEPROM.read(addr + 29);
+  experiment.feederTwoLowBoundOfInterval |= uint16_t(EEPROM.read(addr + 30)) << 8;
+  experiment.feederTwoLowBoundOfInterval |= EEPROM.read(addr + 31);
+  experiment.feederTwoHighBoundOfInterval |= uint16_t(EEPROM.read(addr + 32)) << 8;
+  experiment.feederTwoHighBoundOfInterval |= EEPROM.read(addr + 33);
+}
+
+// ********** Navigation Functions **********
+void chooseExpPathMemory(void)  // Complete
+{
+  switch (chooseExpCalledFrom)
+  {
+    case mainPage:  
+      nextPage = expDisplayPage;
+      prevPage = mainPage;
+    break;
+    case createExpPage:
+      nextPage = mainMenuOrRenamePage;
+      prevPage = createExpPage;
+    break;
+    case settingsPage:
+      nextPage = expNamePage;
+      prevPage = settingsPage;
+    break;
+    case settingsPage + 1:
+      nextPage = expDetailsPage;
+      prevPage = settingsPage;
+    break;
+  }
+}
+
+void feederSetupPathMemory(void)
+{
+  switch (feederSetupCalledFrom)
+  {
+    case createExpPage:
+      prevPage = createExpPage;
+    break;
+    case bothFeedersPage:
+      prevPage = bothFeedersPage;
+    break;
+  }
+}
+
+void resetPathMemory(void)
+{
+  switch (resetCalledFrom)
+  {
+    case resetDevicePage:
+      nextPage = settingsPage;
+      prevPage = resetDevicePage;
+    break;
+    case expDisplayPage:
+      nextPage = expDisplayPage;
+      prevPage = expDisplayPage;
+    break;
+  }
+}
+
+// ********** Reset Functions **********
+void resetStruct(void)  // Complete
+{
+  experiment = {
+                true, false, 1, 1, 1, 0, 1, 1, 1, false, false, 0, 0, 0,
+                false, false, 1, 1, 1, 0, 1, 1, 1, false, false, 0, 0, 0,
+                };
+}
+
+void resetNames(void) // Complete
+{
+  char j = 49;  // ASCII decimal value for 0
+  for (uint8_t i = 0; i <= 59; i++) // Clear memory
+  {
+    EEPROM.write(i, 0);
+  }
+  for (uint8_t i = 0; i <= 50; i += 10) // Replace with single values
+  {
+    EEPROM.write(i, j);
+    j++;  // Increment ASCII value, ie. count up
+  }
+  readExpNames(); // Update working variables
+}
+
+void resetExps(void)  // Complete
+{
+  resetStruct();  // Set struct to default values
+  for (uint8_t i = 1; i < 7; i++) // Reset each experiment
+  {
+    expChoice = i;  
+    saveExperimentToEEPROM();
+  }
+}
+
+void resetExperiment(void)
+{
+  // Controls
+  timerOn = false;
+  systemArmed = false;
+  beenPressed = false;
+  switchBeam = false;
+  experimentStarted = false;
+  experimentRunning = false;
+  experimentPaused = false;
+  manualFeeding = false;
+  cursorIndex = 0;
+  lineIndex = 0;
+  setPage = true;
+  somethingMoved = true;
+  updatePage = true;
+  stopFeederOne();
+  stopFeederTwo();
+  digitalWrite(expRunningLED, LOW);
+  digitalWrite(expPausedLED, LOW);
+  digitalWrite(expArmedLED, LOW);
+
+  // Parameters
+  tenMinuteCounter = 0;
+  minutesCounter = 0;
+  tenSecondCounter = 0;
+  secondsCounter = 0;
+  halfLapArrayLength = 0;
+  lapsCompletedTens = 0;
+  lapsCompletedOnes = 0;
+  lapsCompletedHalfs = 0;
+  
+  feederOneLapsToGetReward = 0;
+  feederOneDispensedPellets = 0;
+  feederOneLapCounter = 0;
+  feederOneIntervalCounter = 0;
+  feederOnePelletBuffer = 0;
+
+  feederTwoLapCounter = 0;
+  feederTwoIntervalCounter = 0;
+  feederTwoDispensedPellets = 0;
+  feederTwoLapsToGetReward = 0;
+  feederTwoPelletBuffer = 0;
+  for (uint8_t i = 0; i < 50; i++)
+  {
+    halfLapArray[i] = 0;
+    feederOneDispensedPelletsArray[i] = 0;
+    feederOneLapsForRewardArray[i] = 0;
+    feederOneIntervalTimeArray[i] = 0;
+    feederTwoDispensedPelletsArray[i] = 0;
+    feederTwoLapsForRewardArray[i] = 0;
+    feederTwoIntervalTimeArray[i] = 0;
+  }
+  for (uint8_t i = 0; i < 25; i++)
+  {
+    feederOneOutputCodeArray[i] = 0;
+    feederTwoOutputCodeArray[i] = 0;
+  }
+}
+
+// ********** Experiment Functions **********
+void collectHalfLaps(void)
+{
+  halfLapArray[halfLapArrayLength] = convertTimeToInt(tenMinuteCounter, minutesCounter, tenSecondCounter, secondsCounter);    
+  updatePage = true;
+}
+
+void calculateTotalLaps(void)
+{
+  if (halfLapArrayLength >= 1)
+  {
+    if (halfLapArrayLength % 2 == 0)  // Increment lapsCompletedCounter
+    {
+      lapsCompletedOnes++;
+      if (lapsCompletedOnes > 9)
+      {
+        lapsCompletedOnes = 0;
+        lapsCompletedTens++;
+      }
+      lapsCompletedHalfs = 0;
+    }
+    else
+      lapsCompletedHalfs = 5;
+  }
+  updatePage = true;
+}
+
+void collectFeederOneData(void) // Store calculated values into respective arrays
+{
+  feederOneDispensedPelletsArray[halfLapArrayLength] = feederOneNumberOfPelletsToDispense;
+  feederOneLapsForRewardArray[halfLapArrayLength] = feederOneLapsToGetReward;
+  if (experiment.feederOneIntervalSchedule)
+    feederOneIntervalTimeArray[halfLapArrayLength] = feederOneIntervalTimeForReward;
+}
+
+void collectFeederTwoData(void)  // Store calculated values into respective arrays
+{
+  feederTwoDispensedPelletsArray[halfLapArrayLength] = feederTwoNumberOfPelletsToDispense;
+  feederTwoLapsForRewardArray[halfLapArrayLength] = feederTwoLapsToGetReward;
+  if (experiment.feederTwoIntervalSchedule)
+    feederTwoIntervalTimeArray[halfLapArrayLength] = feederTwoIntervalTimeForReward;
+}
+
+void calculateFeederOneOutputCode(void)
+{
+  if (experiment.feederOneIntervalSchedule)
+  {
+    if (feederOneIntervalCounter >= feederOneIntervalTimeForReward)
+    {
+      if (feederOneLapCounter == feederOneLapsToGetReward)
+      {
+        feederOneDispensedPellets = 0;  // Clear counter before running incase any false triggers occur
+        runFeederOne();
+        feederOneLapCounter = 0;
+        feederOneIntervalCounter = 0;
+        feederOneOutputCode = 1;  // All conditions satisfied. Thus reward and variables reset
+        feederOnePelletBuffer = feederOneNumberOfPelletsToDispense; // Save value into buffer before it gets reset by 'calculateParameters()'
+        calculateFeederOneParameters();
+      }
+      else
+        feederOneOutputCode = 2;
+    }
+    else if (feederOneIntervalCounter < feederOneIntervalTimeForReward)
+    {
+      if (feederOneLapCounter == feederOneLapsToGetReward)
+      {
+        feederOneDispensedPellets = 0;
+        feederOneLapCounter = 0;
+        feederOneIntervalCounter = 0;
+        feederOneOutputCode = 3;
+        feederOnePelletBuffer = feederOneNumberOfPelletsToDispense; // Save value into buffer before it gets reset by 'calculateParameters()'
+        calculateFeederOneParameters();
+      }
+      else
+        feederOneOutputCode = 4;  // Interval condition satisfied but not lap condition. Thus no reward but variables reset
+    }
+  }
+  else 
+  {
+    if (feederOneLapCounter == feederOneLapsToGetReward)
+    {
+      feederOneDispensedPellets = 0;
+      feederOnePelletBuffer = feederOneNumberOfPelletsToDispense; // Save value into buffer before it gets reset by 'calculateParameters()'
+      runFeederOne();
+      feederOneLapCounter = 0;
+      feederOneOutputCode = 5;
+      calculateFeederOneParameters();
+    }
+    else
+      feederOneOutputCode = 6;
+  }
+  feederOneOutputCodeArray[halfLapArrayLength] = feederOneOutputCode; // Save it
+}
+
+void calculateFeederTwoOutputCode(void)
+{
+  if (experiment.feederTwoIntervalSchedule)
+  {
+    if (feederTwoIntervalCounter >= feederTwoIntervalTimeForReward)
+    {
+      if (feederTwoLapCounter == feederTwoLapsToGetReward)
+      {
+        feederTwoDispensedPellets = 0;  // Clear counter before running incase any false triggers occur
+        runFeederTwo();
+        feederTwoLapCounter = 0;
+        feederTwoIntervalCounter = 0;
+        feederTwoOutputCode = 1;  // All conditions satisfied. Thus reward and variables reset
+        feederTwoPelletBuffer = feederTwoNumberOfPelletsToDispense; // Save value into buffer before it gets reset by 'calculateParameters()'
+        calculateFeederTwoParameters();
+      }
+      else 
+        feederTwoOutputCode = 2;
+    }
+    else if (feederTwoIntervalCounter < feederTwoIntervalTimeForReward)
+    {
+      if (feederTwoLapCounter == feederTwoLapsToGetReward)
+      {
+        feederTwoDispensedPellets = 0;
+        feederTwoLapCounter = 0;
+        feederTwoIntervalCounter = 0;
+        feederTwoOutputCode = 3;
+        feederTwoPelletBuffer = feederTwoNumberOfPelletsToDispense; // Save value into buffer before it gets reset by 'calculateParameters()'
+        calculateFeederTwoParameters();
+      }
+      else
+        feederTwoOutputCode = 4;  // Interval condition satisfied but not lap condition. Thus no reward but variables reset
+    }
+  }
+  else
+  {
+    if (feederTwoLapCounter == feederTwoLapsToGetReward)
+    {
+      feederTwoDispensedPellets = 0;
+      feederTwoPelletBuffer = feederTwoNumberOfPelletsToDispense; // Save value into buffer before it gets reset by 'calculateParameters()'
+      runFeederTwo();
+      feederTwoLapCounter = 0;
+      feederTwoOutputCode = 5;
+      calculateFeederTwoParameters();
+    }
+    else 
+      feederTwoOutputCode = 6;
+  }
+  feederTwoOutputCodeArray[halfLapArrayLength] = feederTwoOutputCode; // Save it
+}
+
+void calculateFeederOneParameters(void)
+{
+  // Pellets
+  if (experiment.feederOnePelletCountType)  // Random
+    feederOneNumberOfPelletsToDispense = random(experiment.feederOneLowBoundPellets, (experiment.feederOneHighBoundPellets + 1));
+  else  // Discrete
+    feederOneNumberOfPelletsToDispense = experiment.feederOneNumberOfPellets;
+
+  // Laps
+  if (experiment.feederOneLapCountType == 0)  // Discrete
+    feederOneLapsToGetReward = experiment.feederOneNumberOfLaps;
+  else if (experiment.feederOneLapCountType == 1) // Random
+    feederOneLapsToGetReward = random(experiment.feederOneLowBoundLaps, (experiment.feederOneHighBoundLaps + 1));
+  else if (experiment.feederOneLapCountType == 2) // Progressive Ratio
+    feederOneLapsToGetReward += 1;
+
+  // Interval Schedule
+  if (experiment.feederOneIntervalSchedule)
+  {
+    if (experiment.feederOneIntervalScheduleType) // Random
+      feederOneIntervalTimeForReward = random(experiment.feederOneLowBoundOfInterval, (experiment.feederOneHighBoundOfInterval + 1));
+    else  // Discrete
+      feederOneIntervalTimeForReward = experiment.feederOneIntervalTime;
+  }
+}
+
+void calculateFeederTwoParameters(void)
+{
+  // Pellets
+  if (experiment.feederTwoPelletCountType)  // Random
+    feederTwoNumberOfPelletsToDispense = random(experiment.feederTwoLowBoundPellets, (experiment.feederTwoHighBoundPellets + 1));
+  else  // Discrete
+    feederTwoNumberOfPelletsToDispense = experiment.feederTwoNumberOfPellets;
+
+  // Laps
+  if (experiment.feederTwoLapCountType == 0)  // Discrete
+    feederTwoLapsToGetReward = experiment.feederTwoNumberOfLaps;
+  else if (experiment.feederTwoLapCountType == 1) // Random
+    feederTwoLapsToGetReward = random(experiment.feederTwoLowBoundLaps, (experiment.feederTwoHighBoundLaps + 1));
+  else if (experiment.feederTwoLapCountType == 2) // Progressive Ratio
+    feederTwoLapsToGetReward += 1;
+
+  // Interval Schedule
+  if (experiment.feederTwoIntervalSchedule)
+  {
+    if (experiment.feederTwoIntervalScheduleType) // Random
+      feederTwoIntervalTimeForReward = random(experiment.feederTwoLowBoundOfInterval, (experiment.feederTwoHighBoundOfInterval + 1));
+    else  // Discrete
+      feederTwoIntervalTimeForReward = experiment.feederTwoIntervalTime;
+  }
+}
