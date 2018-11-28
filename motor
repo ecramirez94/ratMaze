@@ -1,0 +1,140 @@
+/*
+ * - Final iteration of program
+ * - Pin assignments changed to match those on Proto-board
+ */
+
+#define SRCLK 1
+#define clkPin 2
+#define latchPin 3
+#define OE 4
+#define dataPin 5
+#define feederOneActivate 6
+#define feederTwoActivate 7
+#define masterInt 8
+
+uint8_t stepperOneArray[9];
+uint8_t stepperTwoArray[9];
+uint8_t output = 0;
+uint8_t feederOneStepCounter = 0;
+uint8_t feederTwoStepCounter = 0;
+
+bool runFeedOne = false;
+bool runFeedTwo = false;
+bool prevFeedOne = false;
+bool prevFeedTwo = false;
+
+void setup() 
+{
+  delay(5000);
+  pinMode(SRCLK, OUTPUT);
+  pinMode(clkPin, OUTPUT);
+  pinMode(latchPin, OUTPUT);
+  pinMode(OE, OUTPUT);
+  pinMode(dataPin, OUTPUT);
+  pinMode(masterInt, INPUT);
+  pinMode(feederOneActivate, INPUT);
+  pinMode(feederTwoActivate, INPUT);
+  stepperOneArray[0] = 0b00000001;
+  stepperOneArray[1] = 0b00000011;
+  stepperOneArray[2] = 0b00000010;
+  stepperOneArray[3] = 0b00000110;
+  stepperOneArray[4] = 0b00000100;
+  stepperOneArray[5] = 0b00001100;
+  stepperOneArray[6] = 0b00001000;
+  stepperOneArray[7] = 0b00001001;
+  stepperOneArray[8] = 0b00000000;
+
+  stepperTwoArray[0] = 0b00010000;
+  stepperTwoArray[1] = 0b00110000;
+  stepperTwoArray[2] = 0b00100000;
+  stepperTwoArray[3] = 0b01100000;
+  stepperTwoArray[4] = 0b01000000;
+  stepperTwoArray[5] = 0b11000000;
+  stepperTwoArray[6] = 0b10000000;
+  stepperTwoArray[7] = 0b10010000;
+  stepperTwoArray[8] = 0b00000000;
+  stopFeeders();  // Clear register
+  
+  attachInterrupt(0, readFromMaster, FALLING);
+  digitalWrite(SRCLK, HIGH);
+  digitalWrite(OE, LOW); 
+}
+
+void loop() 
+{
+  if (runFeedOne)
+  {
+    runFeederOne();
+    prevFeedOne = true;
+    delayMicroseconds(950);
+  }
+  if (runFeedTwo)
+  {
+    runFeederTwo();
+    prevFeedTwo = true;
+    delayMicroseconds(950);
+  }
+  if (!runFeedOne && prevFeedOne)
+  {
+    stopFeeders();
+    prevFeedOne = false;
+  }
+  if (!runFeedTwo && prevFeedTwo)
+  {
+    stopFeeders();
+    prevFeedTwo = false;
+  }
+}
+
+void readFromMaster(void)
+{
+  bool feederOne = false;
+  bool feederTwo = false;
+  
+  feederOne = digitalRead(feederOneActivate);
+  feederTwo = digitalRead(feederTwoActivate);
+  
+  !feederOne ?  runFeedOne = true : runFeedOne = false;
+  !feederTwo ?  runFeedTwo = true : runFeedTwo = false;
+}
+
+void runFeederOne(void) // Complete
+{
+  feederOneCountSteps();
+  output = stepperOneArray[feederOneStepCounter] | stepperTwoArray[8];
+  shiftToRegister();
+}
+
+void runFeederTwo(void) // Complete
+{
+  feederTwoCountSteps();
+  output = stepperOneArray[8] | stepperTwoArray[feederTwoStepCounter];
+  shiftToRegister();
+}
+
+void stopFeeders(void)  // Complete
+{
+  output = stepperOneArray[8] | stepperTwoArray[8];
+  shiftToRegister();
+}
+
+void feederOneCountSteps(void) // Complete
+{
+  feederOneStepCounter++;
+  if (feederOneStepCounter > 7)
+    feederOneStepCounter = 0;
+}
+
+void feederTwoCountSteps(void) // Complete
+{
+  feederTwoStepCounter++;
+  if (feederTwoStepCounter > 7)
+    feederTwoStepCounter = 0;
+}
+
+void shiftToRegister(void)  // Complete
+{
+  digitalWrite(latchPin, LOW);
+  shiftOut(dataPin, clkPin, MSBFIRST, output);
+  digitalWrite(latchPin, HIGH);
+}
